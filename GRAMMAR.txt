@@ -1,0 +1,132 @@
+CommaSeparatedList(T)
+    Nothing
+    T (',' T)* ','?
+
+---- Declarations --------------------------------------------------------------
+
+TypeAnnotation
+    ':' Expr
+
+VarDecl
+    Ident (':' Expr? ('=' Expr)?)?
+
+---- Function ------------------------------------------------------------------
+
+Parameters
+    CommaSeparatedList(VarDecl)
+
+FunctionHead
+    '(' Parameters ')' TypeAnnotation?
+
+Function
+    FunctionHead '->' Expr
+    FunctionHead Block
+
+---- Enumerations --------------------------------------------------------------
+
+EnumValue
+    Ident ('=' Expr?)
+
+EnumValues
+    CommaSeparatedList(EnumValue)
+
+EnumDecl
+    'enum' TypeAnnotation? '{' EnumValues '}'
+
+---- Packs ---------------------------------------------------------------------
+
+Argument
+    Expr
+    '.' Ident '=' Expr
+
+Arguments
+    CommaSeparatedList(Argument)
+
+Fields
+    (VarDecl ';')
+
+---- Expressions ---------------------------------------------------------------
+
+Operator
+    '+'         -- Add
+    '-'         -- Subtract
+    '*'         -- Multiply
+    '/'         -- Divide
+    '<<'        -- Shift left
+    '>>'        -- Shift right
+    '^'         -- Bit-wise Xor assign
+    '&'         -- Bit-wise And
+    '|'         -- Bit-wise Or
+    '**'        -- Exponent
+
+    '+='        -- Add assign
+    '-='        -- Subtract assign
+    '*='        -- Multiply assign
+    '/='        -- Divide assign
+    '<<='       -- Shift left assign
+    '>>='       -- Shift right assign
+    '^='        -- Bit-wise Xor assign
+    '&='        -- Bit-wise And assign
+    '|='        -- Bit-wise Or assign
+    '**='       -- Exponent assign
+
+    '&&'        -- Logical And
+    '||'        -- Logical Or
+
+BinaryExpr
+    Expr Operator Expr
+
+UnaryExpr
+    '+' Expr    -- Arithmetic identity
+    '-' Expr    -- Arithmetic negation
+    '~' Expr    -- Bit-wise negation
+    '!' Expr    -- Logical negation
+    '++' Expr   -- Pre-increment
+    '--' Expr   -- Pre-decrement
+    Expr '++'   -- Post-increment
+    Expr '--'   -- Post-decrement
+
+PureExpr
+    NumericLiteral              -- Numeric literal
+    StringLiteral               -- String literal
+
+    'struct' '{' Fields '}'     -- Struct
+    Function                    -- Function
+    EnumDecl                    -- Enumeration
+
+    Ident                       -- Access
+    Expr '=' Expr               -- Assignment
+
+    '(' ')'                     -- Unit
+    '(' Expr ')'                -- Group
+
+    BinaryExpr
+    UnaryExpr
+
+    Expr '(' Arguments ')'      -- Call
+    Expr '[' Arguments ']'      -- Subscript
+    Expr '.' Ident              -- Field access
+
+    'return' Expr               -- Return
+
+BlockExpr
+    'for' Expr Function             -- For loop
+    'if' Expr Expr ('else' Expr)?   -- If/Else
+    'defer' Expr                    -- Defer
+    Block                           -- Block
+    VarDecl                         -- Variable declaration
+
+Expr
+    BlockExpr                       -- Block expressions
+    PureExpr                        -- Pure expressions
+
+ExprStatement
+    ';'
+    BlockExpr
+    PureExpr ';'
+
+Block
+    '{' ExprStatements* Expr? '}'
+
+File
+    ExprStatement*

@@ -1,0 +1,45 @@
+# This is a comment
+
+x: f32 = 123;
+$y := "foo";
+
+z  := @regex('"^[\w\-\.]+@([\w-]+\.)+[\w-]{2,}$"');
+i  := "this is \"a string\"";
+
+🔥—ｷｸ := true;
+"this is an—em dash";
+
+#[this is a multiline comment]
+#[[[
+    this is also a multiline comment
+    #[[ With a nested comment! ]]
+    #[And more #[[[ nested comments]]]]
+]]]
+
+numbers := @array(
+    0.1e+2,
+    0x4f.f12p-4,
+    0o777,#foo bar
+    # 01234
+    0123,
+    0b01101,
+    10'000'000,
+);
+
+strings := @array(
+    "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃ",
+    "foo bar alpha beta",
+);
+
+(((1 + 2) * 3) / 4);
+
+Foo := struct {
+  foo: i32;
+  bar: i8*;
+}
+
+square := (T: type, x: T): T {
+    return x * x;
+}
+
+main := (): i32 -> square(5);
