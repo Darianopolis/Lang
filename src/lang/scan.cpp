@@ -82,24 +82,6 @@ struct ScanState
     usz position;
 
     Token token;
-    // TokenType token_type = TokenType::Invalid;
-    // union {
-    //     struct {
-    //         bool is_at;
-    //         std::string_view value;
-    //     } identifier;
-    //     struct {
-    //         bool is_raw;
-    //         std::string_view value;
-    //     } string;
-    //     struct {
-    //         u32 base;
-    //         std::string_view raw;
-    //     } number;
-    //     struct {
-    //         u8 value;
-    //     } punctuation;
-    // } token;
 
     bool is_at_end()
     {
@@ -167,12 +149,32 @@ struct ScanState
 
     }
 
-    void emit_punctuation()
+    void read_punctuation()
     {
+        auto raw_start = position;
+
+        static constexpr auto is_valid_punc = [](std::string_view str)
+        {
+            for (auto& punc : PunctuationSequences) {
+                if (punc == str) return true;
+            }
+            return false;
+        };
+
+        while (advance()) {
+
+            // Try to consume the largest valid punctuation sequence
+            if (!is_valid_punc(source.substr(raw_start, position + 1 - raw_start))) {
+                break;
+            }
+        }
+
+        auto sub = source.substr(raw_start, position - raw_start);
+
         token = {
-            .type = TokenType::Puncuation,
-            .raw = source.substr(position, 1),
-            .punctuation = { .value = advance() },
+            .type = TokenType::Punctuation,
+            .raw = sub,
+            .punctuation = { .value = sub },
         };
     }
 
@@ -182,8 +184,8 @@ struct ScanState
         u8 exponent_separator = 'e';
 
         u32 base = 10;
-        u64 num_start = position;
-        u64 raw_start = position;
+        auto num_start = position;
+        auto raw_start = position;
 
         // Identify hexadecimal or binary number
         if (peek() == '0') {
@@ -249,6 +251,7 @@ struct ScanState
         }
 
         switch (peek()) {
+            case 0:
             LANG_PUNCTUATION_CASES:
             LANG_WHITESPACE_CASES:
             case '#':
@@ -285,9 +288,25 @@ struct ScanState
             if (!is_valid_identifier_continue_element(c)) {
                 auto end = position;
 
+                auto raw = source.substr(raw_start, end - raw_start);
+
+                for (auto& k : Keywords) {
+                    if (k == raw) {
+                        token = {
+                            .type = TokenType::Keyword,
+                            .raw = raw,
+                            .keyword = {
+                                .value = source.substr(start, end - start),
+                            },
+                        };
+
+                        return;
+                    }
+                }
+
                 token = {
                     .type = TokenType::Identifier,
-                    .raw = source.substr(raw_start, end - raw_start),
+                    .raw = raw,
                     .identifier = {
                         .is_at = is_at,
                         .value = source.substr(start, end - start),
@@ -379,7 +398,7 @@ struct ScanState
             switch (c) {
                 LANG_WHITESPACE_CASES:    position++;         break;
                 LANG_DECIMAL_DIGIT_CASES: read_number();      break;
-                LANG_PUNCTUATION_CASES:   emit_punctuation(); break;
+                LANG_PUNCTUATION_CASES:   read_punctuation(); break;
                 case '#':                 skip_comment();     break;
                 case '@':                 read_identifier();  break;
                 case '"':                 read_string();      break;
@@ -416,25 +435,25 @@ TokenList lang::scan(std::string_view source)
 
     while (scanner.scan()) {
         auto i = list.tokens.size();
-        if (scanner.token.type == TokenType::Puncuation) {
+        if (scanner.token.type == TokenType::Punctuation) {
             auto b = scanner.token.punctuation.value;
-            if (b == '{' || b == '[' || b == '(') {
+            if (b == "{" || b == "[" || b == "(") {
                 beginning_tokens.emplace_back(i);
             }
-            else if (b == '}' || b == ']' || b == ')') {
+            else if (b == "}" || b == "]" || b == ")") {
                 if (beginning_tokens.empty()) {
-                    raise_error("unexpected closing '{}' - no matching open", char(b));
+                    raise_error("unexpected closing '{}' - no matching open", b);
                 }
                 auto& begin_token = list.tokens[beginning_tokens.back()];
                 auto a = begin_token.punctuation.value;
                 u8 expected = '\0';
-                switch (b) {
+                switch (b[0]) {
                     case '}': expected = '{'; break;
                     case ']': expected = '['; break;
                     case ')': expected = '('; break;
                 }
-                if (a != expected) {
-                    raise_error("mismatched pair - found closing '{}' but last open was '{}'", char(b), char(a));
+                if (a[0] != expected) {
+                    raise_error("mismatched pair - found closing '{}' but last open was '{}'", b, a);
                 }
 
                 begin_token.punctuation.matching = i;
@@ -447,7 +466,7 @@ TokenList lang::scan(std::string_view source)
     }
 
     if (!beginning_tokens.empty()) {
-        raise_error("unclosed '{}'", char(list.tokens[beginning_tokens.back()].punctuation.value));
+        raise_error("unclosed '{}'", list.tokens[beginning_tokens.back()].punctuation.value);
     }
 
     return list;

@@ -2,52 +2,7 @@ CommaSeparatedList(T)
     Nothing
     T (',' T)* ','?
 
----- Declarations --------------------------------------------------------------
-
-TypeAnnotation
-    ':' Expr
-
-VarDecl
-    Ident (':' Expr? ('=' Expr)?)?
-
----- Function ------------------------------------------------------------------
-
-Parameters
-    CommaSeparatedList(VarDecl)
-
-FunctionHead
-    '(' Parameters ')' TypeAnnotation?
-
-Function
-    FunctionHead '->' Expr
-    FunctionHead Block
-
----- Enumerations --------------------------------------------------------------
-
-EnumValue
-    Ident ('=' Expr?)
-
-EnumValues
-    CommaSeparatedList(EnumValue)
-
-EnumDecl
-    'enum' TypeAnnotation? '{' EnumValues '}'
-
----- Packs ---------------------------------------------------------------------
-
-Argument
-    Expr
-    '.' Ident '=' Expr
-
-Arguments
-    CommaSeparatedList(Argument)
-
-Fields
-    (VarDecl ';')
-
----- Expressions ---------------------------------------------------------------
-
-Operator
+BinaryOperator
     '+'         -- Add
     '-'         -- Subtract
     '*'         -- Multiply
@@ -58,6 +13,7 @@ Operator
     '&'         -- Bit-wise And
     '|'         -- Bit-wise Or
     '**'        -- Exponent
+    '%'         -- Modulo
 
     '+='        -- Add assign
     '-='        -- Subtract assign
@@ -69,64 +25,143 @@ Operator
     '&='        -- Bit-wise And assign
     '|='        -- Bit-wise Or assign
     '**='       -- Exponent assign
+    '%='        -- Modulo assign
+
+    '..'        -- Range (exclusive)
+    '..='       -- Range (inclusive)
 
     '&&'        -- Logical And
     '||'        -- Logical Or
 
-BinaryExpr
-    Expr Operator Expr
+    '='         -- Assignment
 
-UnaryExpr
+InfixExpr
+    Expr BinaryOperator Expr
+
+Return
+    'return' Expr
+
+PrefixExpr
     '+' Expr    -- Arithmetic identity
     '-' Expr    -- Arithmetic negation
     '~' Expr    -- Bit-wise negation
     '!' Expr    -- Logical negation
     '++' Expr   -- Pre-increment
     '--' Expr   -- Pre-decrement
+
+    Return
+
+Argument
+    Expr
+    '.' Identifier '=' Expr
+
+Arguments
+    CommaSeparatedList(Argument)
+
+Call
+    Expr '(' Arguments ')'
+
+Subscript
+    Expr '[' Arguments ']'
+
+FieldAccess
+    Expr '.' Identifier
+
+PostfixExpr
     Expr '++'   -- Post-increment
     Expr '--'   -- Post-decrement
 
-PureExpr
-    NumericLiteral              -- Numeric literal
-    StringLiteral               -- String literal
+    Call
+    Subscript
+    FieldAccess
 
-    'struct' '{' Fields '}'     -- Struct
-    Function                    -- Function
-    EnumDecl                    -- Enumeration
+Terminal
+    Number
+    String
+    Identifier
 
-    Ident                       -- Access
-    Expr '=' Expr               -- Assignment
+VarDecl
+    Identifier (':' Expr? ('=' Expr)?)?
 
-    '(' ')'                     -- Unit
-    '(' Expr ')'                -- Group
+TypeDecl
+    ':' Expr
 
-    BinaryExpr
-    UnaryExpr
+Fields
+    (VarDecl ';')*
 
-    Expr '(' Arguments ')'      -- Call
-    Expr '[' Arguments ']'      -- Subscript
-    Expr '.' Ident              -- Field access
+Struct
+    '@struct' '{' Fields '}'
 
-    'return' Expr               -- Return
+Parameter
+    VarDecl
+    TypeDecl
 
-BlockExpr
-    'for' Expr Function             -- For loop
-    'if' Expr Expr ('else' Expr)?   -- If/Else
-    'defer' Expr                    -- Defer
-    Block                           -- Block
-    VarDecl                         -- Variable declaration
+Parameters
+    CommaSeparatedList(Parameter)
+
+FunctionPrototype
+    '(' Parameters ')' ('->' Expr)?
+
+Function
+    FunctionPrototype Block
+
+EnumValue
+    Identifier ('=' Expr?)
+
+EnumValues
+    CommaSeparatedList(EnumValue)
+
+Enum
+    'enum' (': Expr)? '{' EnumValues '}'
+
+Group
+    '(' Expr ')'
 
 Expr
-    BlockExpr                       -- Block expressions
-    PureExpr                        -- Pure expressions
+    Terminal
 
-ExprStatement
-    ';'
-    BlockExpr
-    PureExpr ';'
+    Struct
+    Function
+    Enum
+    Group
+
+    InfixExpr
+    PrefixExpr
+    PostfixExpr
+
+For
+    'for' Expr '->' '(' Parameters ')' Block
+
+If
+    'if' Expr Block ('else' Block)?
+
+While
+    'while' Expr Block
+
+Defer
+    'defer' Block
+    'defer' Expr ';'
+
+Break
+    'break' ';'
+
+Continue
+    'continue' ';'
 
 Block
-    '{' ExprStatements* Expr? '}'
+    '{' Statement* Expr? '}'
+
+Statement
+    For
+    If
+    While
+    Defer
+    Break
+    Continue
+    Block
+    VarDecl ';'
+    Expr ';'
+    ';'
 
 File
-    ExprStatement*
+    Statement*

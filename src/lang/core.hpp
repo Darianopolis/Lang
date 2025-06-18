@@ -39,6 +39,14 @@ using c32 = char32_t;
 using byte = std::byte;
 
 // -----------------------------------------------------------------------------
+template<typename... Ts>
+struct overload_set : Ts... {
+    using Ts::operator()...;
+};
+
+template<typename... Ts> overload_set(Ts...) -> overload_set<Ts...>;
+
+// -----------------------------------------------------------------------------
 
 template<typename Fn>
 struct Defer

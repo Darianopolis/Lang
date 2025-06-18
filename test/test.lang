@@ -33,13 +33,26 @@ strings := @array(
 
 (((1 + 2) * 3) / 4);
 
-Foo := struct {
+Foo :: @struct {
   foo: i32;
   bar: i8*;
 }
 
-square := (T: type, x: T): T {
+square :: (T: @type, x: T) -> T {
     return x * x;
 }
 
-main := (): i32 -> square(5);
+main :: () -> i32 { square(5) }
+
+for 0..10 -> (i) {
+
+}
+
+{
+    i := 0
+    while i < 10 {
+        defer i++;
+
+
+    }
+}

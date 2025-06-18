@@ -89,9 +89,9 @@ def define(v):
     global defines
     defines += [v]
 
-def source(file):
+def source(file, external):
     global sources
-    sources += [file]
+    sources += [(file, external)]
 
 def include(dir):
     global includes
@@ -122,7 +122,7 @@ def build():
 
     info("compiling...")
 
-    for s in sources:
+    for s, external in sources:
         filename = Path(s.replace('\\', '-').replace('/', '-')).with_suffix(".o")
         output = f"{object_folder}/{filename}"
 
@@ -135,8 +135,10 @@ def build():
 
         command += ["-g", "-O0", "-fno-omit-frame-pointer"]
 
+        if not external:
+            command += ["-Werror"]
+
         command += [
-            # "-Werror",
             "-Wpedantic",
             "-Wall",
 
@@ -147,6 +149,8 @@ def build():
             "-Wno-deprecated-declarations",
             "-Wno-unused-function",
             "-Wno-nested-anon-types",
+
+            "-Wimplicit-fallthrough",
             ]
 
         command += ["-o", output, s]
@@ -196,7 +200,7 @@ def build():
     link_command += ["-g", "-O0", "-fno-omit-frame-pointer"]
 
     link_command += [
-        # "-Werror",
+        "-Werror",
         "-Wpedantic",
         "-Wall",
         ]
@@ -221,9 +225,14 @@ def build():
 
 # -----------------------------------------------------------------------------
 
+unordered_dense_dir = git_source("unordered_dense", "https://github.com/martinus/unordered_dense.git", "main")
+include(f"{unordered_dense_dir}/include")
+
+# -----------------------------------------------------------------------------
+
 simdutf_dir = git_source("simdutf", "https://github.com/simdutf/simdutf.git", "master")
 simdutf_src = f"{simdutf_dir}/src/simdutf.cpp"
-source(simdutf_src)
+source(simdutf_src, external = True)
 source_include(simdutf_src, f"{simdutf_dir}/src")
 include(f"{simdutf_dir}/include")
 
@@ -233,12 +242,12 @@ backward_dir = git_source("backward-cpp", "https://github.com/bombela/backward-c
 if is_linux:
     define("BACKWARD_HAS_BFD=1")
     path_link("bfd")
-source(f"{backward_dir}/backward.cpp")
+source(f"{backward_dir}/backward.cpp", external = True)
 
 # -----------------------------------------------------------------------------
 
 for s in glob.glob("src/**/*.cpp", recursive = True):
-    source(s)
+    source(s, external = False)
 include("src")
 
 # -----------------------------------------------------------------------------
