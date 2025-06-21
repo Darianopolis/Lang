@@ -34,7 +34,7 @@ int main()
 
     // auto message = "((x, y, bar) {})(1, 2, .bar = 3)";
     // auto message = "(x: i32, y := 123, clamp := false){}(1, 2, .clamp = true)";
-    auto message = "(foo: (:i32) -> i32 = (x) { x ** 2 }){ foo(123) }()";
+    auto message = "(foo: (:i32 = 123) -> i32 = (x) { x ** 2 }){ foo(123) }()";
 
     auto start = std::chrono::steady_clock::now();
     auto tokens = scan(message);

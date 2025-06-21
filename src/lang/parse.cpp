@@ -91,49 +91,67 @@ struct Parser
 {
     TokenIterator iter;
 
+    bool is(std::string_view raw)
+    {
+        return iter.peek().raw == raw;
+    }
+
+    bool match(std::string_view raw)
+    {
+        if (iter.peek().raw == raw) {
+            iter.advance();
+            return true;
+        }
+        return false;
+    }
+
+    void consume(std::string_view raw, std::string_view message)
+    {
+        if (iter.peek().raw != raw) raise_error("{}, got {}", message, iter.peek().raw);
+        iter.advance();
+    }
+
+// -------------------------------------------------------------------------
+
     AstNodeList finish_block()
     {
         AstNodeListBuilder stmts;
 
         // TODO
 
-        if (iter.peek().raw != "}") {
+        if (!is("}")) {
             stmts.append(expression());
         }
 
-        if (iter.advance().raw != "}") raise_error("expected '}}' to terminate block");
+        consume("}", "expected '}' to terminate block");
 
         return stmts.to_list();
     }
 
     AstNode* var_decl()
     {
-        auto ident = iter.advance();
-        if (ident.type != lang::TokenType::Identifier) {
-            if (ident.raw != ":") {
-               raise_error("expected identifier or ':'");
-            }
-
-            auto type_expr = expression();
-            return new AstVarDecl{{AstNodeType::VarDecl}, InvalidToken, type_expr, true, {}};
+        auto ident = iter.peek();
+        if (ident.type == lang::TokenType::Identifier) {
+            iter.advance();
+        } else if (ident.raw == ":") {
+            ident = InvalidToken;
+        } else {
+            raise_error("expected identifier or ':' to begin var decl");
         }
 
         AstNode* type_expr{};
         AstNode* init{};
         bool constant = true;
 
-        if (iter.peek().raw == ":") {
-            iter.advance();
-            if (iter.peek().raw != "=") {
+        if (match(":")) {
+            if (!is("=") && !is(":")) {
                 type_expr = expression(TypeExprBindingPower);
             }
 
-            if (iter.peek().raw == "=") {
-                iter.advance();
+            if (match("=")) {
                 init = expression();
                 constant = false;
-            } else if (iter.peek().raw == ":") {
-                iter.advance();
+            } else if (match(":")) {
                 init = expression();
             }
         }
@@ -150,8 +168,7 @@ struct Parser
 
             params.append(var_decl());
 
-            if (iter.peek().raw != ",") break;
-            iter.advance();
+            if (!match(",")) break;
         }
 
         return params.to_list();
@@ -164,22 +181,17 @@ struct Parser
         for (;;) {
             if (iter.peek().raw[0] == end) break;
 
-            auto t = iter.peek();
-            if (t.raw == ".") {
-                iter.advance();
+            if (match(".")) {
                 auto ident = iter.advance();
                 if (ident.type != lang::TokenType::Identifier) raise_error("expected parameter name");
                 if (iter.advance().raw != "=") raise_error("expected '=' after named parameter");
                 auto expr = expression();
                 args.append(new AstCallNamedArgument{{AstNodeType::CallNamedArgument}, ident, expr});
             } else {
-                auto expr = expression();
-                args.append(expr);
+                args.append(expression());
             }
 
-            if (iter.peek().raw != ",") break;
-
-            iter.advance();
+            if (!match(",")) break;
         }
 
         return args.to_list();
@@ -212,15 +224,13 @@ struct Parser
                     if (matched.peek_next().raw == "->" || matched.peek_next().raw == "{") {
                         // Function
                         auto params = parameters(')');
-                        if (iter.advance().raw != ")") raise_error("expected ')' to follow parameter list, got {}", iter.peek_prev().raw);
+                        consume(")", "expected ')' to follow parameter list");
                         AstNode* return_type{};
-                        if (iter.peek().raw == "->") {
-                            iter.advance();
+                        if (match("->")) {
                             return_type = expression(TypeExprBindingPower);
                         }
-                        if (iter.peek().raw == "{") {
+                        if (match("{")) {
                             // Function Implementation
-                            iter.advance();
                             auto body = finish_block();
                             lhs = new AstFunction{{AstNodeType::Function}, params, return_type, body};
                         } else {
@@ -230,7 +240,7 @@ struct Parser
                     } else {
                         // Grouping
                         lhs = expression();
-                        if (iter.advance().raw != ")") raise_error("expected ')' to terminate group");
+                        consume(")", "expected ')' to terminate group");
                     }
                     break;
                 } else {
@@ -241,7 +251,7 @@ struct Parser
                     auto rhs = expression(bp.right);
                     lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, next, rhs};
                 } else {
-                    raise_error("expected valid lhs, found {}", next.raw);
+                    raise_error("expected valid lhs, got {}", next.raw);
                 }
         }
 
@@ -277,14 +287,12 @@ struct Parser
                 } else if (op.raw == "[") {
                     // Subscript
                     auto args = arguments(']');
-                    if (auto t = iter.advance(); t.raw != "]")
-                        raise_error("expected ']' to terminate subscript, got {}", t.raw);
+                    consume("]", "expected ']' to terminate subscript");
                     lhs = new AstCall{{AstNodeType::Call}, lhs, op, args};
                 } else if (op.raw == "(") {
                     // Call
                     auto args = arguments(')');
-                    if (auto t = iter.advance(); t.raw != ")")
-                        raise_error("expected ')' to terminate call, got {}", t.raw);
+                    consume(")", "expected ')' to terminate call");
                     lhs = new AstCall{{AstNodeType::Call}, lhs, op, args};
                 } else {
                     lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op, {}};

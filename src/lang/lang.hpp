@@ -331,7 +331,7 @@ struct AstCall : AstNode
 {
     AstNode* callee;
     Token token;
-    AstNodeList arguments; // AstCallArgument[]
+    AstNodeList arguments;
 };
 
 struct AstLiteral : AstNode
