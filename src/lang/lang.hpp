@@ -32,7 +32,7 @@ constexpr std::array PunctuationSequences
     "|", "|=", "||",
     "=", "==",
     "!", "!=",
-    "~",
+    "~", "~|",
 
     "(", ")",
     "{", "}",
@@ -45,61 +45,166 @@ constexpr std::array PunctuationSequences
 
 // -----------------------------------------------------------------------------
 
-struct BindingPower
+
+#define LANG_OPS_Postfix \
+    X(Call) X(Subscript) X(FieldAccess) X(Postincrement) X(Postdecrement) X(Dereference)
+
+#define LANG_OPS_Prefix \
+    X(Preincrement) X(Predecrement) X(Arithmetic_Identity) \
+    X(Arithmetic_Negate) X(Bitwise_Negate) X(Logical_Negate)
+
+#define LANG_OPS_Arithmetic \
+    X(Add) X(Subtract) X(Multiply) X(Divide) X(Modulo) X(Power)
+
+#define LANG_OPS_Bitwise \
+    X(ShiftLeft) X(ShiftRight) X(Xor) X(Bitwise_And) X(Bitwise_Or)
+
+#define LANG_OPS_Logical \
+    X(Logical_And) X(Logical_Or)
+
+#define LANG_OPS_Comparison \
+    X(Equal) X(NotEqual) X(Greater) X(GreaterEqual) X(Less) X(LessEqual)
+
+#define LANG_OPS_Range \
+    X(Range_Exclusive) X(Range_Inclusive)
+
+#define LANG_OPS_Assign \
+    X(Assign) \
+    X(Assign_Add) X(Assign_Subtract) X(Assign_Multiply) X(Assign_Divide) X(Assign_Modulo) X(Assign_Exponentiate) \
+    X(Assign_ShiftLeft) X(Assign_ShiftRight) X(Assign_Xor) X(Assign_Bitwise_And) X(Assign_Bitwise_Or)
+
+#define LANG_OPS_All \
+    LANG_OPS_Postfix \
+    LANG_OPS_Prefix \
+    LANG_OPS_Arithmetic \
+    LANG_OPS_Bitwise \
+    LANG_OPS_Logical \
+    LANG_OPS_Comparison \
+    LANG_OPS_Range \
+    X(TypeAnnotation) \
+    LANG_OPS_Assign
+
+enum class Operator : u16
 {
-    u8 left{};
-    u8 right{};
+    None,
 
-    operator bool() const noexcept { return left || right; };
+#define X(i) i,
+LANG_OPS_All
+#undef X
 };
 
-enum class Associativity
+constexpr
+std::string_view get_op_name(Operator op)
 {
-    LeftToRight,
-    RightToLeft,
-};
+    switch (op) {
+        case Operator::None: return "None";
 
-enum class FixType
+#define X(o) case Operator::o: return #o;
+LANG_OPS_All
+#undef X
+    }
+}
+
+enum class OperatorString : u32 { };
+
+constexpr OperatorString make_opstr(const char* op, u32 len)
 {
-    Prefix,
-    Infix,
-    Postfix,
-};
+    u32 hash {};
+    for (u32 i = 0; i < len; ++i) {
+        hash |= op[i] << (i * 8);
+    }
 
-struct OperatorGroup {
-    Associativity dir;
-};
+    return OperatorString(hash);
+}
 
-using OperatorDeclStep = std::variant<std::string_view, FixType, OperatorGroup>;
+constexpr OperatorString make_opstr(std::string_view op)
+{
+    return make_opstr(op.data(), u32(op.size()));
+}
 
-constexpr auto TypeExprOperatorKey = "::<typexpr>";
+constexpr Operator get_prefix_op(std::string_view op)
+{
+    switch (make_opstr(op)) {
 
-constexpr auto Operators = std::to_array<OperatorDeclStep>({
-    FixType::Postfix,
-    OperatorGroup{Associativity::LeftToRight}, "++", "--", "(", "[", ".",
-    FixType::Prefix,
-    OperatorGroup{Associativity::RightToLeft}, "++", "--", "+", "-", "!", "~", "&", "*",
-    FixType::Infix,
-    OperatorGroup{Associativity::LeftToRight}, "*", "/", "%", "**",
-    OperatorGroup{Associativity::LeftToRight}, "+", "-",
-    OperatorGroup{Associativity::LeftToRight}, "<<", ">>",
-    OperatorGroup{Associativity::LeftToRight}, "<=>",
-    OperatorGroup{Associativity::LeftToRight}, "<", "<=", ">", ">=",
-    OperatorGroup{Associativity::LeftToRight}, "==", "!=",
-    OperatorGroup{Associativity::LeftToRight}, "&",
-    OperatorGroup{Associativity::LeftToRight}, "^",
-    OperatorGroup{Associativity::LeftToRight}, "|",
-    OperatorGroup{Associativity::LeftToRight}, "..", "..=",
-    OperatorGroup{Associativity::LeftToRight}, "&&",
-    OperatorGroup{Associativity::LeftToRight}, "||",
-    FixType::Prefix,
-    OperatorGroup{Associativity::RightToLeft}, TypeExprOperatorKey,
-    FixType::Infix,
-    OperatorGroup{Associativity::RightToLeft},
-        "=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "^=", "|=", "**=",
-    FixType::Prefix,
-        "return",
-});
+        case make_opstr("++"): return Operator::Preincrement;
+        case make_opstr("--"): return Operator::Predecrement;
+
+        case make_opstr("+"): return Operator::Arithmetic_Identity;
+        case make_opstr("-"): return Operator::Arithmetic_Negate;
+        case make_opstr("~"): return Operator::Bitwise_Negate;
+        case make_opstr("!"): return Operator::Logical_Negate;
+
+        case make_opstr(":"): return Operator::TypeAnnotation;
+    }
+    return Operator::None;
+}
+
+constexpr Operator get_other_op(std::string_view op)
+{
+    switch (make_opstr(op)) {
+        case make_opstr("^"):   return Operator::Dereference;
+        case make_opstr("++"):  return Operator::Postincrement;
+        case make_opstr("--"):  return Operator::Postdecrement;
+        case make_opstr("("):   return Operator::Call;
+        case make_opstr("["):   return Operator::Subscript;
+        case make_opstr("."):   return Operator::FieldAccess;
+
+        case make_opstr("+"):   return Operator::Add;
+        case make_opstr("-"):   return Operator::Subtract;
+        case make_opstr("*"):   return Operator::Multiply;
+        case make_opstr("/"):   return Operator::Divide;
+        case make_opstr("%"):   return Operator::Modulo;
+        case make_opstr("**"):  return Operator::Power;
+
+        case make_opstr("<<"):  return Operator::ShiftLeft;
+        case make_opstr(">>"):  return Operator::ShiftRight;
+        case make_opstr("~|"):  return Operator::Xor;
+        case make_opstr("&"):   return Operator::Bitwise_And;
+        case make_opstr("|"):   return Operator::Bitwise_Or;
+
+        case make_opstr("&&"):  return Operator::Logical_And;
+        case make_opstr("||"):  return Operator::Logical_Or;
+
+        case make_opstr("=="):  return Operator::Equal;
+        case make_opstr("!="):  return Operator::NotEqual;
+        case make_opstr(">"):   return Operator::Greater;
+        case make_opstr(">="):  return Operator::GreaterEqual;
+        case make_opstr("<"):   return Operator::Less;
+        case make_opstr("<="):  return Operator::LessEqual;
+
+        case make_opstr(".."):  return Operator::Range_Exclusive;
+        case make_opstr("..="): return Operator::Range_Inclusive;
+
+        case make_opstr("="):   return Operator::Assign;
+        case make_opstr("+="):  return Operator::Assign_Add;
+        case make_opstr("-="):  return Operator::Assign_Subtract;
+        case make_opstr("*="):  return Operator::Assign_Multiply;
+        case make_opstr("/="):  return Operator::Assign_Divide;
+        case make_opstr("%="):  return Operator::Assign_Modulo;
+        case make_opstr("**="): return Operator::Assign_Exponentiate;
+        case make_opstr("<<="): return Operator::Assign_ShiftLeft;
+        case make_opstr(">>="): return Operator::Assign_ShiftRight;
+        case make_opstr("~|="): return Operator::Assign_Xor;
+        case make_opstr("&="):  return Operator::Assign_Bitwise_And;
+        case make_opstr("|="):  return Operator::Assign_Bitwise_Or;
+    }
+    return Operator::None;
+}
+
+constexpr bool is_op_postfix(Operator op)
+{
+    switch (op) {
+        case Operator::Dereference:
+        case Operator::Postincrement:
+        case Operator::Postdecrement:
+        case Operator::Call:
+        case Operator::Subscript:
+        case Operator::FieldAccess:
+            return true;
+        default:
+            return false;
+    }
+}
 
 // -----------------------------------------------------------------------------
 
@@ -153,31 +258,65 @@ struct TokenList
     TokenIterator matching_pair_for(Token token) const;
 };
 
+#define LANG_NOISY_TOKEN_ITERATOR 1
+
 struct TokenIterator
 {
     const TokenList* list;
     u32 current;
 
+#if LANG_NOISY_TOKEN_ITERATOR
+    mutable bool peeked = false;
+#endif
+
     bool is_at_end() const { return current >= list->tokens.size();            }
     u32      index() const { return is_at_end() ? InvalidTokenIndex : current; }
 
-    Token advance()    { return is_at_end() ? InvalidToken : list->tokens[current++]; }
-    Token peek() const { return is_at_end() ? InvalidToken : list->tokens[current];   }
+    Token advance()
+    {
+#if LANG_NOISY_TOKEN_ITERATOR
+        if (!peeked) {
+            peek();
+        }
+        peeked = is_at_end();
+#endif
+        return is_at_end() ? InvalidToken : list->tokens[current++];
+    }
+
+    Token peek() const
+    {
+        auto token = is_at_end() ? InvalidToken : list->tokens[current];
+#if LANG_NOISY_TOKEN_ITERATOR
+        if (!peeked) {
+            log_trace("token '{}'", token.raw);
+            peeked = true;
+        }
+#endif
+        return token;
+    }
 
     Token peek_next() const
     {
         auto next = current + 1;
-        return next >= list->tokens.size() ? InvalidToken : list->tokens[next];
+        auto token = next >= list->tokens.size() ? InvalidToken : list->tokens[next];
+#if LANG_NOISY_TOKEN_ITERATOR
+        log_trace("peek_next '{}'", list->tokens[current].raw);
+#endif
+        return token;
     }
 
     Token peek_prev() const
     {
-        return current == 0 ? InvalidToken : TokenIterator(list, current - 1).peek();
+        auto token = current == 0 ? InvalidToken : TokenIterator(list, current - 1).peek();
+#if LANG_NOISY_TOKEN_ITERATOR
+        log_trace("peek_prev '{}'", list->tokens[current].raw);
+#endif
+        return token;
     }
 };
 
 inline
-TokenIterator lang::TokenList::matching_pair_for(Token token) const
+TokenIterator TokenList::matching_pair_for(Token token) const
     {
         if (token.type != TokenType::Punctuation) return TokenIterator{this, InvalidTokenIndex};
         auto i = token.punctuation.matching;
@@ -433,14 +572,17 @@ void debug_print(AstNodeList tree)
             },
             [&](const AstOpExpr& node) {
                 if (node.lhs && node.rhs) {
-                    println("Infix_Operator({})", node.token.punctuation.value);
+                    // println("Infix_Operator('{}')", node.token.punctuation.value);
+                    println("Operator({})", get_op_name(get_other_op(node.token.raw)));
                     print_node(node.lhs, depth + 1);
                     print_node(node.rhs, depth + 1);
                 } else if (node.lhs) {
-                    println("Postfix_Operator({})", node.token.punctuation.value);
+                    // println("Postfix_Operator('{}')", node.token.punctuation.value);
+                    println("Operator({})", get_op_name(get_other_op(node.token.raw)));
                     print_node(node.lhs, depth + 1);
                 } else {
-                    println("Prefix_Operator({})", node.token.punctuation.value);
+                    // println("Prefix_Operator('{}')", node.token.punctuation.value);
+                    println("Operator({})", get_op_name(get_prefix_op(node.token.raw)));
                     print_node(node.rhs, depth + 1);
                 }
             },

@@ -2,7 +2,7 @@
 
 #include <ankerl/unordered_dense.h>
 
-LANG_NAMESPACE_USE
+LANG_NAMESPACE_BEGIN
 
 /*
  *
@@ -12,84 +12,150 @@ LANG_NAMESPACE_USE
  *
  */
 
-struct BindingPowerSet
+enum class BindingDirection : u8
 {
-    BindingPower prefix{}, infix{}, postfix{};
+    Invalid,
+    Left,
+    Right,
+};
+
+constexpr
+std::string_view get_dir_name(BindingDirection dir)
+{
+    if (dir == BindingDirection::Left) return "Left";
+    if (dir == BindingDirection::Right) return "Right";
+    return "None";
+}
+
+constexpr auto make_op_pair_key(Operator l, Operator r) {
+    return u32(l) | u32(r) << 16;
 };
 
 const static
-auto BindingPowerLookup = []{
-    ankerl::unordered_dense::map<std::string_view, BindingPowerSet> lookup;
+auto OperatorOrdering = []{
+    ankerl::unordered_dense::map<u32, BindingDirection> lookup;
 
-    u8 binding_power = 255;
-    FixType fix_type;
-    Associativity associativity;
-
-    for (auto& op : Operators) {
-        std::visit(overload_set {
-            [&](std::string_view str) {
-                BindingPower bp = {};
-                switch (fix_type) {
-                    case lang::FixType::Prefix:
-                        bp.right = binding_power;
-                        lookup[str].prefix = bp;
-                        break;
-                    case lang::FixType::Infix:
-                        if (associativity == Associativity::LeftToRight) {
-                            bp.left = binding_power - 1;
-                            bp.right = binding_power;
-                        } else {
-                            bp.left = binding_power;
-                            bp.right = binding_power - 1;
-                        }
-                        lookup[str].infix = bp;
-                        break;
-                    case lang::FixType::Postfix:
-                        bp.left = binding_power;
-                        lookup[str].postfix = bp;
-                        break;
+    auto bind = [&](BindingDirection dir, std::initializer_list<Operator> _l, std::initializer_list<Operator> _r) {
+        for (auto l : _l) {
+            for (auto r : _r) {
+                auto& cur_dir = lookup[make_op_pair_key(l, r)];
+                if (cur_dir == BindingDirection::Invalid) {
+                    // log_trace("op({}, {}) = {}", get_op_name(l), get_op_name(r), get_dir_name(dir));
+                } else if (cur_dir != dir) {
+                    raise_error("op({}, {}) = [{}] contradicts earlier assignment to [{}]", get_op_name(l), get_op_name(r), get_dir_name(dir), get_dir_name(cur_dir));
+                } else {
+                    log_warn("  redundant assignment of op({}, {}) to = {}", get_op_name(l), get_op_name(r), get_dir_name(dir));
                 }
-            },
-            [&](FixType _fix_type) {
-                fix_type = _fix_type;
-            },
-            [&](OperatorGroup group) {
-                binding_power -= 2;
-                associativity = group.dir;
+                cur_dir = dir;
             }
-        }, op);
-    }
+        }
+    };
+
+    enum class Associativity
+    {
+        LeftToRight,
+        RightToLeft,
+    };
+
+    using enum Associativity;
+    using enum BindingDirection;
+    using enum Operator;
+
+    auto order = [&](std::span<const std::initializer_list<Operator>> op_groups) {
+        for (int i = 0; i < op_groups.size(); ++i) {
+            for (int j = i + 1; j < op_groups.size(); ++j) {
+                auto l = op_groups.begin()[i];
+                auto r = op_groups.begin()[j];
+                bind(Left, l, r);
+                bind(Right, r, l);
+            }
+        }
+    };
+
+    auto assoc = [&](Associativity assoc, std::span<const std::initializer_list<Operator>> op_groups) {
+        for (auto ops : op_groups) {
+            switch (assoc) {
+                case Associativity::LeftToRight:
+                    bind(Left, ops, ops);
+                    break;
+                case Associativity::RightToLeft:
+                    bind(Right, ops, ops);
+            }
+        }
+    };
+
+#define X(i) i,
+
+    // General operator strata
+
+    order({{ LANG_OPS_All }, { None }});
+
+    order({
+        { LANG_OPS_Postfix },
+        { LANG_OPS_Prefix },
+        { LANG_OPS_Arithmetic LANG_OPS_Bitwise LANG_OPS_Logical },
+        { LANG_OPS_Comparison },
+        { LANG_OPS_Range },
+        { TypeAnnotation }
+    });
+
+    // Arithmetic infix
+
+    order(             { { Power }, { Multiply, Divide }, { Add, Subtract } });
+    assoc(LeftToRight, { { Power }, { Multiply, Divide }, { Add, Subtract } });
+
+    // Bitwise infix
+
+    order({{ Bitwise_And }, { Bitwise_Or }});
+
+    // Logical infix
+
+    order(             {{ Logical_And }, { Logical_Or }});
+    assoc(LeftToRight, {{ Logical_And }, { Logical_Or }});
+
+    // Assignment
+
+    order({{ LANG_OPS_Prefix }, { LANG_OPS_Assign }});
+    bind(Right,
+        { LANG_OPS_Assign },
+        {
+            LANG_OPS_Postfix
+            LANG_OPS_Arithmetic
+            LANG_OPS_Bitwise
+            LANG_OPS_Logical
+            LANG_OPS_Comparison
+            LANG_OPS_Range
+        });
+    assoc(RightToLeft, {{ LANG_OPS_Assign }});
+
+    // Type Annotation
+
+    bind(Left, { TypeAnnotation }, { LANG_OPS_Assign });
+
+    // Output
+
+    log_debug("Defined {} operator relationships for {} operators", lookup.size(), std::array { LANG_OPS_All }.size());
+
+#undef X
 
     return lookup;
 }();
 
-const static
-auto TypeExprBindingPower = BindingPowerLookup.at(TypeExprOperatorKey).prefix.right;
-
-BindingPower prefix_binding_power(Token token)
+BindingDirection get_op_bind_dir(Operator l, Operator r)
 {
-    auto iter = BindingPowerLookup.find(token.raw);
-    if (iter == BindingPowerLookup.end()) return {};
-    return iter->second.prefix;
+    auto iter = OperatorOrdering.find(make_op_pair_key(l, r));
+    return iter == OperatorOrdering.end() ? BindingDirection::Invalid : iter->second;
 }
 
-BindingPower infix_binding_power(Token token)
-{
-    auto iter = BindingPowerLookup.find(token.raw);
-    if (iter == BindingPowerLookup.end()) return {};
-    return iter->second.infix;
-}
-
-BindingPower postfix_binding_power(Token token)
-{
-    auto iter = BindingPowerLookup.find(token.raw);
-    if (iter == BindingPowerLookup.end()) return {};
-    return iter->second.postfix;
-}
+#define LANG_NOISY_PARSER 1
 
 struct Parser
 {
     TokenIterator iter;
+
+#if LANG_NOISY_PARSER
+    i32 depth = -1;
+#endif
 
     bool is(std::string_view raw)
     {
@@ -115,6 +181,12 @@ struct Parser
 
     AstNodeList finish_block()
     {
+#if LANG_NOISY_PARSER
+        depth++;
+        defer { depth--; };
+        log_debug("{}finish_block", indent_str(depth));
+#endif
+
         AstNodeListBuilder stmts;
 
         // TODO
@@ -130,8 +202,14 @@ struct Parser
 
     AstNode* var_decl()
     {
+#if LANG_NOISY_PARSER
+        depth++;
+        defer { depth--; };
+        log_debug("{}var_decl", indent_str(depth));
+#endif
+
         auto ident = iter.peek();
-        if (ident.type == lang::TokenType::Identifier) {
+        if (ident.type == TokenType::Identifier) {
             iter.advance();
         } else if (ident.raw == ":") {
             ident = InvalidToken;
@@ -145,7 +223,7 @@ struct Parser
 
         if (match(":")) {
             if (!is("=") && !is(":")) {
-                type_expr = expression(TypeExprBindingPower);
+                type_expr = expression(Operator::TypeAnnotation);
             }
 
             if (match("=")) {
@@ -161,6 +239,12 @@ struct Parser
 
     AstNodeList parameters(u8 end)
     {
+#if LANG_NOISY_PARSER
+        depth++;
+        defer { depth--; };
+        log_debug("{}parameters({})", indent_str(depth), char(end));
+#endif
+
         AstNodeListBuilder params;
 
         for (;;) {
@@ -176,6 +260,12 @@ struct Parser
 
     AstNodeList arguments(u8 end)
     {
+#if LANG_NOISY_PARSER
+        depth++;
+        defer { depth--; };
+        log_debug("{}arguments({})", indent_str(depth), char(end));
+#endif
+
         AstNodeListBuilder args;
 
         for (;;) {
@@ -183,7 +273,7 @@ struct Parser
 
             if (match(".")) {
                 auto ident = iter.advance();
-                if (ident.type != lang::TokenType::Identifier) raise_error("expected parameter name");
+                if (ident.type != TokenType::Identifier) raise_error("expected parameter name");
                 if (iter.advance().raw != "=") raise_error("expected '=' after named parameter");
                 auto expr = expression();
                 args.append(new AstCallNamedArgument{{AstNodeType::CallNamedArgument}, ident, expr});
@@ -197,28 +287,34 @@ struct Parser
         return args.to_list();
     }
 
-    AstNode* expression(u32 min_bp = 0)
+    AstNode* expression(Operator left_op = Operator::None)
     {
+#if LANG_NOISY_PARSER
+        depth++;
+        defer { depth--; };
+        log_debug("{}expression({})", indent_str(depth), get_op_name(left_op));
+#endif
+
         // Prefix / "Nonfix"
 
         auto next = iter.advance();
         AstNode* lhs{};
         switch (next.type) {
-            case lang::TokenType::Keyword:
+            case TokenType::Keyword:
                 if (next.raw == "true" || next.raw == "false") {
                     lhs = new AstLiteral{{AstNodeType::Literal}, next};
                     break;
                 } else {
                     [[fallthrough]];
                 }
-            case lang::TokenType::Number:
-            case lang::TokenType::String:
+            case TokenType::Number:
+            case TokenType::String:
                 lhs = new AstLiteral{{AstNodeType::Literal}, next};
                 break;
-            case lang::TokenType::Identifier:
+            case TokenType::Identifier:
                 lhs = new AstNamedReference{{AstNodeType::NamedReference}, next};
                 break;
-            case lang::TokenType::Punctuation:
+            case TokenType::Punctuation:
                 if (next.punctuation.value == "(") {
                     auto matched = iter.list->matching_pair_for(next);
                     if (matched.peek_next().raw == "->" || matched.peek_next().raw == "{") {
@@ -227,7 +323,7 @@ struct Parser
                         consume(")", "expected ')' to follow parameter list");
                         AstNode* return_type{};
                         if (match("->")) {
-                            return_type = expression(TypeExprBindingPower);
+                            return_type = expression(Operator::TypeAnnotation);
                         }
                         if (match("{")) {
                             // Function Implementation
@@ -247,8 +343,9 @@ struct Parser
                     [[fallthrough]];
                 }
             default:
-                if (auto bp = prefix_binding_power(next)) {
-                    auto rhs = expression(bp.right);
+                auto op = get_prefix_op(next.raw);
+                if (op != Operator::None) {
+                    auto rhs = expression(op);
                     lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, next, rhs};
                 } else {
                     raise_error("expected valid lhs, got {}", next.raw);
@@ -256,60 +353,64 @@ struct Parser
         }
 
         for (;;) {
-            auto op = iter.peek();
-            if (op.type == TokenType::Invalid) break;
-            if (op.type != TokenType::Punctuation) raise_error("expected operator, got {}", op.raw);
+            auto op_token = iter.peek();
+            if (op_token.type == TokenType::Invalid) break;
 
-            // Infix
-
-            if (auto bp = infix_binding_power(op)) {
-                if (bp.left < min_bp) break;
-
-                iter.advance();
-                auto rhs = expression(bp.right);
-                lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op, rhs};
-                continue;
+            auto op = get_other_op(op_token.raw);
+            if (op == Operator::None) {
+                // TODO: Handle legal end-of-expression conditions
+                break;
+                // raise_error("expected operator, got {}", op_token.raw);
             }
 
-            // Postfix
+            auto dir = get_op_bind_dir(left_op, op);
 
-            if (auto bp = postfix_binding_power(op)) {
-                if (bp.left < min_bp) break;
+#if LANG_NOISY_PARSER
+            log_debug("{}({}, {}) = {}", indent_str(depth), get_op_name(left_op), get_op_name(op), get_dir_name(dir));
+#endif
+            if (dir == BindingDirection::Invalid) {
+                raise_error("ambiguous operator sequence (no ordering for '{}' and '{}'), use parenthesis",
+                    get_op_name(left_op), get_op_name(op));
+            }
+            if (dir == BindingDirection::Left) {
+                break;
+            }
 
-                iter.advance();
-
-                if (op.raw == ".") {
+            iter.advance();
+            if (is_op_postfix(op)) {
+                if (op_token.raw == ".") {
                     // Field accesss
                     auto field = iter.advance();
-                    if (field.type != lang::TokenType::Identifier)
+                    if (field.type != TokenType::Identifier)
                         raise_error("expected field following field access operator '.', got {}", field.raw);
                     lhs = new AstFieldAccess{{AstNodeType::FieldAccess}, lhs, field};
-                } else if (op.raw == "[") {
+                } else if (op_token.raw == "[") {
                     // Subscript
                     auto args = arguments(']');
                     consume("]", "expected ']' to terminate subscript");
-                    lhs = new AstCall{{AstNodeType::Call}, lhs, op, args};
-                } else if (op.raw == "(") {
+                    lhs = new AstCall{{AstNodeType::Call}, lhs, op_token, args};
+                } else if (op_token.raw == "(") {
                     // Call
                     auto args = arguments(')');
                     consume(")", "expected ')' to terminate call");
-                    lhs = new AstCall{{AstNodeType::Call}, lhs, op, args};
+                    lhs = new AstCall{{AstNodeType::Call}, lhs, op_token, args};
                 } else {
-                    lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op, {}};
+                    lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op_token, {}};
                 }
-
-                continue;
+            } else {
+                auto rhs = expression(op);
+                lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op_token, rhs};
             }
-
-            break;
         }
 
         return lhs;
     }
 };
 
-AstNodeList lang::parse(TokenList& tokens)
+AstNodeList parse(TokenList& tokens)
 {
     Parser parser { tokens.begin() };
     return {parser.expression()};
 }
+
+LANG_NAMESPACE_END

@@ -95,6 +95,18 @@ void log_error(std::format_string<Args...> fmt, Args&&... args)
 
 // -----------------------------------------------------------------------------
 
+inline
+std::string indent_str(u32 depth, const char* indent = "  ")
+{
+    std::string out;
+    for (u32 i = 0; i < depth; ++i) {
+        out += indent;
+    }
+    return out;
+}
+
+// -----------------------------------------------------------------------------
+
 template<typename ...Args>
 [[noreturn]]
 void raise_error(std::format_string<Args...> fmt, Args&&... args)

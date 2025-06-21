@@ -35,11 +35,16 @@ int main()
     // auto message = "((x, y, bar) {})(1, 2, .bar = 3)";
     // auto message = "(x: i32, y := 123, clamp := false){}(1, 2, .clamp = true)";
     auto message = "(foo: (:i32 = 123) -> i32 = (x) { x ** 2 }){ foo(123) }()";
+    // auto message = "a + b * c * d + e";
+    // auto message = "a & b | (c ~| d)";
+    // auto message = "a | b^() > c + d";
+    // auto message = "(: ++list = 123) -> i32";
 
     auto start = std::chrono::steady_clock::now();
     auto tokens = scan(message);
     auto end = std::chrono::steady_clock::now();
 
+#if 0
     log_debug("token details");
 
     for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
@@ -73,30 +78,33 @@ int main()
                 raise_error("unknown token type: {}", std::to_underlying(token.type));
         }
     }
+#endif
 
-    // log_debug("matched view");
+#if 0
+    log_debug("matched view");
 
-    // auto indent_str = "  ";
-    // auto indent = 0;
+    auto indent_str = "  ";
+    auto indent = 0;
 
-    // for (auto iter = tokens.begin(); iter; ++iter) {
-    //     auto token = *iter;
-    //     auto matched = iter.matching_pair_for(token);
-    //     if (matched && matched.index() < iter.index()) {
-    //         indent--;
-    //     }
+    for (auto iter = tokens.begin(); iter; ++iter) {
+        auto token = *iter;
+        auto matched = iter.matching_pair_for(token);
+        if (matched && matched.index() < iter.index()) {
+            indent--;
+        }
 
-    //     auto message = std::format("{:4} ", iter.index());
-    //     for (auto i = 0; i < indent; ++i) {
-    //         message += indent_str;
-    //     }
-    //     message += token.raw;
-    //     log_info("{}", message);
+        auto message = std::format("{:4} ", iter.index());
+        for (auto i = 0; i < indent; ++i) {
+            message += indent_str;
+        }
+        message += token.raw;
+        log_info("{}", message);
 
-    //     if (matched && matched.index() > iter.index()) {
-    //         indent++;
-    //     }
-    // }
+        if (matched && matched.index() > iter.index()) {
+            indent++;
+        }
+    }
+#endif
 
     log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
 
