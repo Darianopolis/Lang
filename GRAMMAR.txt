@@ -80,11 +80,15 @@ Terminal
     String
     Identifier
 
+LoopControlFlow
+    'break'
+    'continue'
+
 VarDecl
     Identifier (':' Expr? ('=' Expr)?)?
 
 TypeDecl
-    ':' Expr
+    ':' Expr ('=' Expr)?
 
 Fields
     (VarDecl ';')*
@@ -117,8 +121,9 @@ Enum
 Group
     '(' Expr ')'
 
-Expr
+PureExpr
     Terminal
+    LoopControlFlow
 
     Struct
     Function
@@ -129,38 +134,40 @@ Expr
     PrefixExpr
     PostfixExpr
 
-For
-    'for' Expr '->' '(' Parameters ')' Block
+Else
+    'else' BlockExpr
+    'else' If
 
 If
-    'if' Expr Block ('else' Block)?
+    'if' Expr Block Else?
+
+For
+    'for' Expr '->' '(' Parameters ')' Block
 
 While
     'while' Expr Block
 
 Defer
     'defer' Block
-    'defer' Expr ';'
-
-Break
-    'break' ';'
-
-Continue
-    'continue' ';'
 
 Block
     '{' Statement* Expr? '}'
 
-Statement
-    For
+Expr
+    PureExpr
+    BlockExpr
+
+BlockExpr
     If
+    For
     While
-    Defer
-    Break
-    Continue
     Block
+
+Statement
+    BlockExpr
+    Defer
     VarDecl ';'
-    Expr ';'
+    PureExpr ';'
     ';'
 
 File

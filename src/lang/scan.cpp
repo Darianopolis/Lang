@@ -162,7 +162,6 @@ struct ScanState
         };
 
         while (advance()) {
-
             // Try to consume the largest valid punctuation sequence
             if (!is_valid_punc(source.substr(raw_start, position + 1 - raw_start))) {
                 break;

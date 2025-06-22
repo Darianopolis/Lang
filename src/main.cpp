@@ -34,11 +34,14 @@ int main()
 
     // auto message = "((x, y, bar) {})(1, 2, .bar = 3)";
     // auto message = "(x: i32, y := 123, clamp := false){}(1, 2, .clamp = true)";
-    auto message = "(foo: (:i32 = 123) -> i32 = (x) { x ** 2 }){ foo(123) }()";
+    // auto message = "(foo: (:i32 = 123) -> i32 = (x) { x ** 2 }){ foo(123) }()";
     // auto message = "a + b * c * d + e";
     // auto message = "a & b | (c ~| d)";
     // auto message = "a | b^() > c + d";
     // auto message = "(: ++list = 123) -> i32";
+    // auto message = "-a++[].b && !++c()^ || &foo^";
+    // auto message = "a & b > c && d";
+    auto message = "main :: () { print(\"Hello, world\") }";
 
     auto start = std::chrono::steady_clock::now();
     auto tokens = scan(message);

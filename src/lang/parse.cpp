@@ -91,12 +91,22 @@ auto OperatorOrdering = []{
     order({{ LANG_OPS_All }, { None }});
 
     order({
-        { LANG_OPS_Postfix },
-        { LANG_OPS_Prefix },
-        { LANG_OPS_Arithmetic LANG_OPS_Bitwise LANG_OPS_Logical },
+        { LANG_OPS_Postfix LANG_OPS_Prefix },
+        { LANG_OPS_Arithmetic LANG_OPS_Bitwise },
         { LANG_OPS_Comparison },
+        { LANG_OPS_Logical },
         { LANG_OPS_Range },
         { TypeAnnotation }
+    });
+
+    // Post-/Pre-fix
+
+    order({
+        { Call, Subscript, FieldAccess },
+        { Preincrement, Predecrement, Postincrement, Postdecrement },
+        { Dereference },
+        { AddressOf },
+        { Arithmetic_Identity, Arithmetic_Negate, Bitwise_Negate, Logical_Negate }
     });
 
     // Arithmetic infix
@@ -122,8 +132,8 @@ auto OperatorOrdering = []{
             LANG_OPS_Postfix
             LANG_OPS_Arithmetic
             LANG_OPS_Bitwise
-            LANG_OPS_Logical
             LANG_OPS_Comparison
+            LANG_OPS_Logical
             LANG_OPS_Range
         });
     assoc(RightToLeft, {{ LANG_OPS_Assign }});
@@ -358,9 +368,7 @@ struct Parser
 
             auto op = get_other_op(op_token.raw);
             if (op == Operator::None) {
-                // TODO: Handle legal end-of-expression conditions
                 break;
-                // raise_error("expected operator, got {}", op_token.raw);
             }
 
             auto dir = get_op_bind_dir(left_op, op);
@@ -410,7 +418,7 @@ struct Parser
 AstNodeList parse(TokenList& tokens)
 {
     Parser parser { tokens.begin() };
-    return {parser.expression()};
+    return {parser.var_decl()};
 }
 
 LANG_NAMESPACE_END

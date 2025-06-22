@@ -20,27 +20,55 @@ constexpr std::array Keywords
 
 constexpr std::array PunctuationSequences
 {
-    "+", "+=", "++",
-    "-", "-=", "--", "->",
-    "*", "*=", "**", "**=",
-    "/", "/=",
-    "^", "^=",
-    "%", "%=",
-    "<", "<=", "<<", "<<=", "<=>",
-    ">", ">=", ">>", ">>=",
-    "&", "&=", "&&",
-    "|", "|=", "||",
-    "=", "==",
-    "!", "!=",
-    "~", "~|",
+    "^",    // dereference
 
-    "(", ")",
-    "{", "}",
-    "[", "]",
+    "+",    // arithmetic identity / add
+    "+=",   // assing add
+    "++",   // pre/post increment
+    "-",    // arithmetic negation / subtract
+    "-=",   // subtract assign
+    "--",   // pre/post decrement
+    "->",   // return type introducer
+    "*",    // multiply
+    "*=",   // multiply assign
+    "**",   // power
+    "**=",  // power assign
+    "/",    // divide
+    "/=",   // divide assing
+    "%",    // modulo
+    "%=",   // moduloe assign
+    "<",    // less than
+    "<=",   // less greater
+    "<<",   // shift left
+    "<<=",  // shift left assign
+    ">",    // greater
+    ">=",   // greater equal
+    ">>",   // shift right
+    ">>=",  // shift right assign
+    "&",    // bitwise and
+    "&=",   // bitwise and assign
+    "&&",   // logical and
+    "|",    // bitwise or
+    "|=",   // bitwise or assign
+    "||",   // logical or
+    "=",    // assign
+    "==",   // equal
+    "!",    // logical negate
+    "!=",   // not equal
+    "~",    // bitwise negate
+    "~|",   // xor
+    "~|=",  // xor assign
 
-    ".", "..", "..=",
-    "?",
-    ":",
+    "(", ")",   // parentheses
+    "{", "}",   // braces
+    "[", "]",   // brackets
+
+    ".",    // field access
+    "..",   // range exclusive
+    "..=",  // range inclusive
+    ":",    // declaration / type annotation introducer / const init
+
+    "?",    // *reserved
 };
 
 // -----------------------------------------------------------------------------
@@ -51,7 +79,7 @@ constexpr std::array PunctuationSequences
 
 #define LANG_OPS_Prefix \
     X(Preincrement) X(Predecrement) X(Arithmetic_Identity) \
-    X(Arithmetic_Negate) X(Bitwise_Negate) X(Logical_Negate)
+    X(Arithmetic_Negate) X(Bitwise_Negate) X(Logical_Negate) X(AddressOf)
 
 #define LANG_OPS_Arithmetic \
     X(Add) X(Subtract) X(Multiply) X(Divide) X(Modulo) X(Power)
@@ -125,6 +153,7 @@ constexpr OperatorString make_opstr(std::string_view op)
 constexpr Operator get_prefix_op(std::string_view op)
 {
     switch (make_opstr(op)) {
+        case make_opstr("&"): return Operator::AddressOf;
 
         case make_opstr("++"): return Operator::Preincrement;
         case make_opstr("--"): return Operator::Predecrement;
@@ -133,8 +162,6 @@ constexpr Operator get_prefix_op(std::string_view op)
         case make_opstr("-"): return Operator::Arithmetic_Negate;
         case make_opstr("~"): return Operator::Bitwise_Negate;
         case make_opstr("!"): return Operator::Logical_Negate;
-
-        case make_opstr(":"): return Operator::TypeAnnotation;
     }
     return Operator::None;
 }
