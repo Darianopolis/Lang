@@ -2,15 +2,9 @@
 
 #include <ankerl/unordered_dense.h>
 
-LANG_NAMESPACE_BEGIN
+#include <source_location>
 
-/*
- *
- * Pratt parser
- *
- * Reference: https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
- *
- */
+LANG_NAMESPACE_BEGIN
 
 enum class BindingDirection : u8
 {
@@ -159,12 +153,22 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
 
 #define LANG_NOISY_PARSER 1
 
+#if LANG_NOISY_PARSER
+#define LANG_PARSER_TRACE_FUNC(fmt, ...) \
+    auto _func_name = __func__; \
+    log_debug("{}{}(" fmt ") {{", indent_str(_depth), __func__ __VA_OPT__(,) __VA_ARGS__); \
+    _depth++; \
+    defer { _depth--; log_debug("{}}} {}", indent_str(_depth), _func_name); }
+#else
+#define LANG_PARSER_TRACE_FUNC(...)
+#endif
+
 struct Parser
 {
     TokenIterator iter;
 
 #if LANG_NOISY_PARSER
-    i32 depth = -1;
+    i32 _depth = 0;
 #endif
 
     bool is(std::string_view raw)
@@ -189,34 +193,173 @@ struct Parser
 
 // -------------------------------------------------------------------------
 
-    AstNodeList finish_block()
+    AstIf* finish_if()
     {
-#if LANG_NOISY_PARSER
-        depth++;
-        defer { depth--; };
-        log_debug("{}finish_block", indent_str(depth));
-#endif
+        LANG_PARSER_TRACE_FUNC("");
+
+        auto expr = expression();
+        auto then_branch = block_expr();
+
+        AstNode* else_branch{};
+        if (match("else")) {
+            if (match("if")) {
+                else_branch = finish_if();
+            } else {
+                else_branch = block_expr();
+            }
+        }
+
+        return new AstIf{{AstNodeType::If}, expr, then_branch, else_branch};
+    }
+
+    AstFor* finish_for()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        auto range_expr = expression();
+
+        // TODO: Ambiguity with function syntax?
+        consume("->", "expected '->' after for range expression");
+
+        consume("(", "expected parameter list in for");
+        auto params = parameters(')');
+        consume(")", "expected ')' to follow parameter list");
+
+        auto body = block();
+
+        return new AstFor{{AstNodeType::For}, range_expr, params, body};
+    }
+
+    AstWhile* finish_while()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        auto cond = expression();
+        auto body = block();
+        return new AstWhile{{AstNodeType::While}, cond, body};
+    }
+
+    AstNode* maybe_block_expr()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        if (match("if")) {
+            return finish_if();
+        } else if (match("for")) {
+            return finish_for();
+        } else if (match("while")) {
+            return finish_while();
+        } else if (match("{")) {
+            return finish_block();
+        }
+
+        return nullptr;
+    }
+
+    AstNode* block_expr()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        auto expr = maybe_block_expr();
+        if (!expr) raise_error("expected block expression, got {}", iter.peek().raw);
+        return expr;
+    }
+
+    AstDefer* maybe_defer()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        if (match("defer")) {
+            auto body = block();
+            return new AstDefer{{AstNodeType::Defer}, body};
+        }
+        return nullptr;
+    }
+
+    std::pair<AstNode*, bool> statement()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        if (match(";")) return {nullptr, false};
+
+        // Block expression
+
+        if (auto stmt = maybe_block_expr()) return {stmt, false};
+
+        // Defer
+
+        if (auto stmt = maybe_defer()) return {stmt, false};
+
+        // Variable declaration
+
+        if (iter.peek().type == TokenType::Identifier && iter.peek_next().raw == ":") {
+            auto decl = var_decl();
+            consume(";", "expected ';' after declaration");
+            return {decl, false};
+        }
+
+        // Expression statement
+
+        auto expr = expression();
+        return {expr, !match(";")};
+    }
+
+    AstBlock* finish_block()
+    {
+        LANG_PARSER_TRACE_FUNC("");
 
         AstNodeListBuilder stmts;
+        AstNode* terminal{};
 
         // TODO
 
-        if (!is("}")) {
-            stmts.append(expression());
+        while (!is("}")) {
+            auto[stmt, is_terminal] = statement();
+            if (is_terminal) {
+                terminal = stmt;
+                break;
+            }
+            stmts.append(stmt);
         }
 
         consume("}", "expected '}' to terminate block");
 
+        return new AstBlock{{AstNodeType::Block}, stmts.to_list(), terminal};
+    }
+
+    AstBlock* block()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        consume("{", "expected block");
+        return finish_block();
+    }
+
+    AstNodeList file()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        AstNodeListBuilder stmts;
+
+        while (iter.peek().type != TokenType::Eof) {
+            auto[stmt, is_terminal] = statement();
+            stmts.append(stmt);
+            if (is_terminal) {
+                break;
+                // raise_error("terminal expressions not allowed at file scope");
+            }
+        }
+
+        if (iter.peek().type != TokenType::Eof) {
+            raise_error("expected end of file, got {}", iter.peek().raw);
+        }
+
         return stmts.to_list();
     }
 
-    AstNode* var_decl()
+    AstVarDecl* var_decl()
     {
-#if LANG_NOISY_PARSER
-        depth++;
-        defer { depth--; };
-        log_debug("{}var_decl", indent_str(depth));
-#endif
+        LANG_PARSER_TRACE_FUNC("");
 
         auto ident = iter.peek();
         if (ident.type == TokenType::Identifier) {
@@ -249,11 +392,7 @@ struct Parser
 
     AstNodeList parameters(u8 end)
     {
-#if LANG_NOISY_PARSER
-        depth++;
-        defer { depth--; };
-        log_debug("{}parameters({})", indent_str(depth), char(end));
-#endif
+        LANG_PARSER_TRACE_FUNC("closing = '{}'", char(end));
 
         AstNodeListBuilder params;
 
@@ -270,11 +409,7 @@ struct Parser
 
     AstNodeList arguments(u8 end)
     {
-#if LANG_NOISY_PARSER
-        depth++;
-        defer { depth--; };
-        log_debug("{}arguments({})", indent_str(depth), char(end));
-#endif
+        LANG_PARSER_TRACE_FUNC("closing = '{}'", char(end));
 
         AstNodeListBuilder args;
 
@@ -297,33 +432,26 @@ struct Parser
         return args.to_list();
     }
 
-    AstNode* expression(Operator left_op = Operator::None)
+    AstNode* maybe_non_recursive_expression()
     {
-#if LANG_NOISY_PARSER
-        depth++;
-        defer { depth--; };
-        log_debug("{}expression({})", indent_str(depth), get_op_name(left_op));
-#endif
+        LANG_PARSER_TRACE_FUNC("");
 
-        // Prefix / "Nonfix"
+        if (auto expr = maybe_block_expr()) {
+            return expr;
+        }
 
         auto next = iter.advance();
-        AstNode* lhs{};
         switch (next.type) {
             case TokenType::Keyword:
                 if (next.raw == "true" || next.raw == "false") {
-                    lhs = new AstLiteral{{AstNodeType::Literal}, next};
-                    break;
-                } else {
-                    [[fallthrough]];
+                    return new AstLiteral{{AstNodeType::Literal}, next};
                 }
+                break;
             case TokenType::Number:
             case TokenType::String:
-                lhs = new AstLiteral{{AstNodeType::Literal}, next};
-                break;
+                return new AstLiteral{{AstNodeType::Literal}, next};
             case TokenType::Identifier:
-                lhs = new AstNamedReference{{AstNodeType::NamedReference}, next};
-                break;
+                return new AstNamedReference{{AstNodeType::NamedReference}, next};
             case TokenType::Punctuation:
                 if (next.punctuation.value == "(") {
                     auto matched = iter.list->matching_pair_for(next);
@@ -338,43 +466,53 @@ struct Parser
                         if (match("{")) {
                             // Function Implementation
                             auto body = finish_block();
-                            lhs = new AstFunction{{AstNodeType::Function}, params, return_type, body};
+                            return new AstFunction{{AstNodeType::Function}, params, return_type, body};
                         } else {
                             // Function Prototype
-                            lhs = new AstFunction{{AstNodeType::Function}, params, return_type, {}};
+                            return new AstFunction{{AstNodeType::Function}, params, return_type, {}};
                         }
                     } else {
                         // Grouping
-                        lhs = expression();
+                        auto expr = expression();
                         consume(")", "expected ')' to terminate group");
+                        return expr;
                     }
                     break;
-                } else {
-                    [[fallthrough]];
                 }
+                break;
             default:
-                auto op = get_prefix_op(next.raw);
-                if (op != Operator::None) {
-                    auto rhs = expression(op);
-                    lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, next, rhs};
-                } else {
-                    raise_error("expected valid lhs, got {}", next.raw);
-                }
+        }
+        iter.decrement();
+        return nullptr;
+    }
+
+    AstNode* expression(Operator left_op = Operator::None)
+    {
+        LANG_PARSER_TRACE_FUNC("left_op = '{}'", get_op_name(left_op));
+
+        auto lhs = maybe_non_recursive_expression();
+        if (!lhs) {
+            auto op_token = iter.advance();
+            auto op = get_prefix_op(op_token.raw);
+            if (op == Operator::None) raise_error("expected valid lhs or prefix operator, git {}", op_token.raw);
+
+            auto rhs = expression(op);
+            lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, op_token, rhs};
         }
 
         for (;;) {
             auto op_token = iter.peek();
-            if (op_token.type == TokenType::Invalid) break;
 
             auto op = get_other_op(op_token.raw);
             if (op == Operator::None) {
+                log_trace("unrecognised operator '{}', breaking", op_token.raw);
                 break;
             }
 
             auto dir = get_op_bind_dir(left_op, op);
 
 #if LANG_NOISY_PARSER
-            log_debug("{}({}, {}) = {}", indent_str(depth), get_op_name(left_op), get_op_name(op), get_dir_name(dir));
+            log_debug("{}({}, {}) = {}", indent_str(_depth), get_op_name(left_op), get_op_name(op), get_dir_name(dir));
 #endif
             if (dir == BindingDirection::Invalid) {
                 raise_error("ambiguous operator sequence (no ordering for '{}' and '{}'), use parenthesis",
@@ -418,7 +556,7 @@ struct Parser
 AstNodeList parse(TokenList& tokens)
 {
     Parser parser { tokens.begin() };
-    return {parser.var_decl()};
+    return parser.file();
 }
 
 LANG_NAMESPACE_END

@@ -238,6 +238,8 @@ constexpr bool is_op_postfix(Operator op)
 enum class TokenType {
     Invalid = 0,
 
+    Eof = 1,
+
     Keyword,     // if else
     Identifier,  // foo
     String,      // "foo"
@@ -275,6 +277,7 @@ struct Token
 };
 
 constexpr auto InvalidToken = Token { .type = TokenType::Invalid };
+constexpr auto EofToken = Token { .type = TokenType::Eof };
 
 struct TokenList
 {
@@ -293,30 +296,44 @@ struct TokenIterator
     u32 current;
 
 #if LANG_NOISY_TOKEN_ITERATOR
-    mutable bool peeked = false;
+    mutable bool _peeked = false;
 #endif
 
     bool is_at_end() const { return current >= list->tokens.size();            }
     u32      index() const { return is_at_end() ? InvalidTokenIndex : current; }
 
+    void decrement()
+    {
+        if (current > 0) {
+            current--;
+
+#if LANG_NOISY_TOKEN_ITERATOR
+            if (_peeked) {
+                log_trace("token.decrement");
+                _peeked = false;
+            }
+#endif
+        }
+    }
+
     Token advance()
     {
 #if LANG_NOISY_TOKEN_ITERATOR
-        if (!peeked) {
+        if (!_peeked) {
             peek();
         }
-        peeked = is_at_end();
+        _peeked = is_at_end();
 #endif
-        return is_at_end() ? InvalidToken : list->tokens[current++];
+        return is_at_end() ? EofToken : list->tokens[current++];
     }
 
     Token peek() const
     {
-        auto token = is_at_end() ? InvalidToken : list->tokens[current];
+        auto token = is_at_end() ? EofToken : list->tokens[current];
 #if LANG_NOISY_TOKEN_ITERATOR
-        if (!peeked) {
-            log_trace("token '{}'", token.raw);
-            peeked = true;
+        if (!_peeked) {
+            log_trace("token.peek '{}'", token.raw);
+            _peeked = true;
         }
 #endif
         return token;
@@ -325,21 +342,36 @@ struct TokenIterator
     Token peek_next() const
     {
         auto next = current + 1;
-        auto token = next >= list->tokens.size() ? InvalidToken : list->tokens[next];
+        auto token = next >= list->tokens.size() ? EofToken : list->tokens[next];
 #if LANG_NOISY_TOKEN_ITERATOR
-        log_trace("peek_next '{}'", list->tokens[current].raw);
+        log_trace("token.peek_next '{}'", token.raw);
 #endif
         return token;
     }
 
     Token peek_prev() const
     {
-        auto token = current == 0 ? InvalidToken : TokenIterator(list, current - 1).peek();
+        auto token = current == 0 ? EofToken : TokenIterator(list, current - 1).peek();
 #if LANG_NOISY_TOKEN_ITERATOR
-        log_trace("peek_prev '{}'", list->tokens[current].raw);
+        log_trace("token.peek_prev '{}'", token.raw);
 #endif
         return token;
     }
+
+    union Internal {
+        std::monostate _{};
+        Token token;
+        Internal(): _{} { }
+    } _internal;
+          Token    operator *()    { return is_at_end() ? EofToken : list->tokens[current]; }
+    const Token*   operator->()    { _internal.token = **this; return &_internal.token; }
+    TokenIterator  operator++()    { return {list, current + 1}; }
+    TokenIterator  operator--()    { return {list, current - 1}; };
+    TokenIterator& operator++(int) { current++; return *this; }
+    TokenIterator& operator--(int) { current--; return *this; };
+    TokenIterator  operator+(i32 o) { return {list, current + u32(o)}; };
+    TokenIterator  operator-(i32 o) { return {list, current - u32(o)}; };
+    bool operator==(const TokenIterator& other) const { return index() == other.index(); };
 };
 
 inline
@@ -361,25 +393,52 @@ TokenList scan(std::string_view);
 // -----------------------------------------------------------------------------
 
 #define NodeTypes \
-    X_NodeTypes(VarDecl) \
-    X_NodeTypes(Function) \
-    X_NodeTypes(If) \
-    X_NodeTypes(Return) \
-    X_NodeTypes(While) \
-    X_NodeTypes(Block) \
-    X_NodeTypes(NamedReference) \
-    X_NodeTypes(OpExpr) \
-    X_NodeTypes(Call) \
-    X_NodeTypes(CallNamedArgument) \
-    X_NodeTypes(Literal) \
-    X_NodeTypes(FieldAccess) \
+    X(VarDecl) \
+    X(Function) \
+    X(If) \
+    X(Return) \
+    X(For) \
+    X(While) \
+    X(Defer) \
+    X(Block) \
+    X(NamedReference) \
+    X(OpExpr) \
+    X(Call) \
+    X(CallNamedArgument) \
+    X(Literal) \
+    X(FieldAccess) \
 
 enum class AstNodeType
 {
-#define X_NodeTypes(v) v,
+#define X(v) v,
 NodeTypes
-#undef X_NodeTypes
+#undef X
 };
+
+constexpr
+std::string_view get_ast_node_type_name(AstNodeType t)
+{
+    switch (t) {
+#define X(v) case AstNodeType::v: return #v;
+NodeTypes
+#undef X
+    }
+}
+
+constexpr
+bool is_ast_node_type_block_expr(AstNodeType t)
+{
+    switch (t) {
+        case AstNodeType::If:
+        case AstNodeType::For:
+        case AstNodeType::While:
+        case AstNodeType::Defer:
+        case AstNodeType::Block:
+            return true;
+        default:
+            return false;
+    }
+}
 
 struct AstNode
 {
@@ -448,7 +507,7 @@ struct AstFunction : AstNode
 {
     AstNodeList parameters; // AstVarDecl[]
     AstNode* return_type{};
-    AstNodeList body{};
+    AstNode* body{};
 };
 
 struct AstIf : AstNode
@@ -469,10 +528,22 @@ struct AstWhile : AstNode
     AstNode* body{};
 };
 
+struct AstFor : AstNode
+{
+    AstNode* range_expr;
+    AstNodeList parameters;
+    AstNode* body;
+};
+
 struct AstBlock : AstNode
 {
     AstNodeList statements;
     AstNode* terminal_expression{};
+};
+
+struct AstDefer : AstNode
+{
+    AstNode* body;
 };
 
 struct AstNamedReference : AstNode
@@ -516,9 +587,9 @@ Ret visit(Fn&& fn, AstNode* expr)
 {
     if (!expr) return Ret{};
     switch (expr->type) {
-#define X_NodeTypes(t) case AstNodeType::t: return fn(*static_cast<Ast##t*>(expr));
+#define X(t) case AstNodeType::t: return fn(*static_cast<Ast##t*>(expr));
 NodeTypes
-#undef X_NodeTypes
+#undef X
     }
 }
 
@@ -552,6 +623,17 @@ void debug_print(AstNodeList tree)
                     print_node(node.init, depth + 1);
                 }
             },
+            [&](const AstBlock& node) {
+                println("Block");
+                for (auto s = node.statements.head; s; s = s->next) {
+                    print_node(s, depth + 1);
+                }
+                if (node.terminal_expression) {
+                    depth++;
+                    println("TerminalExpression");
+                    print_node(node.terminal_expression, depth + 1);
+                }
+            },
             [&](const AstFunction& node) {
                 println("Function");
                 depth++;
@@ -565,11 +647,9 @@ void debug_print(AstNodeList tree)
                     println("Return_Type");
                     print_node(node.return_type, depth + 1);
                 }
-                if (node.body.head) {
+                if (node.body) {
                     println("Body");
-                    for (auto s = node.body.head; s; s = s->next) {
-                        print_node(s, depth + 1);
-                    }
+                    print_node(node.body, depth + 1);
                 }
             },
             [&](const AstCall& node) {
@@ -617,8 +697,20 @@ void debug_print(AstNodeList tree)
                 println("Field_Access({})", node.field.raw);
                 print_node(node.lhs, depth + 1);
             },
+            [&](const AstIf& node) {
+                println("If");
+                depth++;
+                println("Cond");
+                print_node(node.cond, depth + 1);
+                println("Then");
+                print_node(node.then_branch, depth + 1);
+                if (node.else_branch) {
+                    println("Else");
+                    print_node(node.else_branch, depth + 1);
+                }
+            },
             [&](const auto& node) {
-                log_error("unknown node type: {}", std::to_underlying(node.type));
+                log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));
             },
         }, _node);
     };

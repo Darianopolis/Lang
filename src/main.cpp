@@ -41,7 +41,25 @@ int main()
     // auto message = "(: ++list = 123) -> i32";
     // auto message = "-a++[].b && !++c()^ || &foo^";
     // auto message = "a & b > c && d";
-    auto message = "main :: () { print(\"Hello, world\") }";
+    // auto message = "main :: () { print(\"Hello, world\") }";
+
+    auto message = R"(
+
+fib :: (x) {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+};
+
+# TODO: Support this - var_decl as an operator
+# std.min :: (x, y) { if x <= { x } else { y } }
+
+main :: () {
+    x := 1;
+    if x > 1 { println("This is impossible"); }
+
+    println("fib({}) = {}", x, fib(x));
+};
+
+)";
 
     auto start = std::chrono::steady_clock::now();
     auto tokens = scan(message);
