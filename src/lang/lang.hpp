@@ -425,21 +425,6 @@ NodeTypes
     }
 }
 
-constexpr
-bool is_ast_node_type_block_expr(AstNodeType t)
-{
-    switch (t) {
-        case AstNodeType::If:
-        case AstNodeType::For:
-        case AstNodeType::While:
-        case AstNodeType::Defer:
-        case AstNodeType::Block:
-            return true;
-        default:
-            return false;
-    }
-}
-
 struct AstNode
 {
     AstNodeType type;
@@ -593,6 +578,24 @@ NodeTypes
     }
 }
 
+constexpr
+bool is_ast_node_block_expr(AstNode* t)
+{
+    if (!t) return false;
+    switch (t->type) {
+        case AstNodeType::If:
+        case AstNodeType::For:
+        case AstNodeType::While:
+        case AstNodeType::Defer:
+        case AstNodeType::Block:
+            return true;
+        case AstNodeType::Function:
+            return static_cast<AstFunction*>(t)->body;
+        default:
+            return false;
+    }
+}
+
 AstNodeList parse(TokenList& tokens);
 
 inline
@@ -601,7 +604,7 @@ void debug_print(AstNodeList tree)
     auto print_root = [&](this auto&& print_node, AstNode* _node, u32 depth) -> void {
         auto indent = [&] {
             for (u32 i = 0; i < depth; ++i) {
-                std::print("  ");
+                std::print(". ");
             }
         };
 
@@ -700,7 +703,7 @@ void debug_print(AstNodeList tree)
             [&](const AstIf& node) {
                 println("If");
                 depth++;
-                println("Cond");
+                println("Condition");
                 print_node(node.cond, depth + 1);
                 println("Then");
                 print_node(node.then_branch, depth + 1);
@@ -708,6 +711,30 @@ void debug_print(AstNodeList tree)
                     println("Else");
                     print_node(node.else_branch, depth + 1);
                 }
+            },
+            [&](const AstFor& node) {
+                println("For");
+                depth++;
+                println("Range_Expression");
+                print_node(node.range_expr, depth + 1);
+                println("Parameters");
+                for (auto p = node.parameters.head; p; p = p->next) {
+                    print_node(p, depth + 1);
+                }
+                println("Body");
+                print_node(node.body, depth + 1);
+            },
+            [&](const AstWhile& node) {
+                println("While");
+                depth++;
+                println("Condition");
+                print_node(node.cond, depth + 1);
+                println("Body");
+                print_node(node.body, depth + 1);
+            },
+            [&](const AstDefer& node) {
+                println("Defer");
+                print_node(node.body, depth + 1);
             },
             [&](const auto& node) {
                 log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));

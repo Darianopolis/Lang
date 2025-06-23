@@ -44,7 +44,7 @@ bool is_hexadecimal_digit(u8 c)
 #define LANG_PUNCTUATION_CASES \
     case '(': case ')': case '[': case ']': case '{': case '}': \
     case ',': case '.': case '+': case ':': case ';': case '*': \
-    case '!': case '=': case '>': case '<': case '-': \
+    case '!': case '=': case '>': case '<': case '-': case '%': \
     case '&': case '|': case '^': case '~': case '?': case '/'
 
 bool is_ascii_alpha(u8 c)

@@ -45,16 +45,33 @@ int main()
 
     auto message = R"(
 
-fib :: (x) {
+std   :: @package("std");
+mylib := @package("com.foobar.mylib");
+@using(mylib);
+
+fib :: (n) {
     if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 };
 
+bar :: {
+    123
+};
+
+(a + b)[c](d);
+
 # TODO: Support this - var_decl as an operator
-# std.min :: (x, y) { if x <= { x } else { y } }
+# std.min :: (x, y) { if x <= { x } else { y } };
 
 main :: () {
-    x := 1;
-    if x > 1 { println("This is impossible"); }
+    div := 2;
+    for 0..10 -> (x) {
+        println(if x % div { "odd" } else { "even" });
+    }
+
+    while div > 0 {
+        defer { --div; }
+        println("{}", div);
+    }
 
     println("fib({}) = {}", x, fib(x));
 };

@@ -294,7 +294,12 @@ struct Parser
 
         if (iter.peek().type == TokenType::Identifier && iter.peek_next().raw == ":") {
             auto decl = var_decl();
-            consume(";", "expected ';' after declaration");
+
+            consume(";", "expected ';' after declaration statement");
+
+            // if (!is_ast_node_block_expr(decl->init)) {
+            //     consume(";", "expected ';' after declaration with non block-expression init");
+            // }
             return {decl, false};
         }
 
@@ -311,10 +316,9 @@ struct Parser
         AstNodeListBuilder stmts;
         AstNode* terminal{};
 
-        // TODO
-
         while (!is("}")) {
             auto[stmt, is_terminal] = statement();
+            if (!stmt) continue;
             if (is_terminal) {
                 terminal = stmt;
                 break;
@@ -343,6 +347,7 @@ struct Parser
 
         while (iter.peek().type != TokenType::Eof) {
             auto[stmt, is_terminal] = statement();
+            if (!stmt) continue;
             stmts.append(stmt);
             if (is_terminal) {
                 break;
@@ -360,6 +365,9 @@ struct Parser
     AstVarDecl* var_decl()
     {
         LANG_PARSER_TRACE_FUNC("");
+
+        // TODO: Evaluate declarations as an expression part
+        // TODO: Init should be parsed as block expression first if possible
 
         auto ident = iter.peek();
         if (ident.type == TokenType::Identifier) {
@@ -379,11 +387,16 @@ struct Parser
                 type_expr = expression(Operator::TypeAnnotation);
             }
 
+            bool has_init = false;
             if (match("=")) {
-                init = expression();
+                has_init = true;
                 constant = false;
             } else if (match(":")) {
-                init = expression();
+                has_init = true;
+            }
+            if (has_init) {
+                // init = maybe_function();
+                if (!init) init = expression();
             }
         }
 
@@ -432,6 +445,34 @@ struct Parser
         return args.to_list();
     }
 
+    AstNode* maybe_function()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        if (iter.peek().raw != "(") return nullptr;
+
+        auto matched = iter.list->matching_pair_for(iter.peek());
+        if (matched.peek_next().raw != "->" && matched.peek_next().raw != "{") return nullptr;
+
+        iter.advance();
+
+        // Function
+        auto params = parameters(')');
+        consume(")", "expected ')' to follow parameter list");
+        AstNode* return_type{};
+        if (match("->")) {
+            return_type = expression(Operator::TypeAnnotation);
+        }
+        if (match("{")) {
+            // Function Implementation
+            auto body = finish_block();
+            return new AstFunction{{AstNodeType::Function}, params, return_type, body};
+        } else {
+            // Function Prototype
+            return new AstFunction{{AstNodeType::Function}, params, return_type, {}};
+        }
+    }
+
     AstNode* maybe_non_recursive_expression()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -440,49 +481,39 @@ struct Parser
             return expr;
         }
 
-        auto next = iter.advance();
+        auto next = iter.peek();
         switch (next.type) {
             case TokenType::Keyword:
                 if (next.raw == "true" || next.raw == "false") {
+                    iter.advance();
                     return new AstLiteral{{AstNodeType::Literal}, next};
                 }
                 break;
             case TokenType::Number:
             case TokenType::String:
+                iter.advance();
                 return new AstLiteral{{AstNodeType::Literal}, next};
             case TokenType::Identifier:
+                iter.advance();
                 return new AstNamedReference{{AstNodeType::NamedReference}, next};
             case TokenType::Punctuation:
                 if (next.punctuation.value == "(") {
-                    auto matched = iter.list->matching_pair_for(next);
-                    if (matched.peek_next().raw == "->" || matched.peek_next().raw == "{") {
-                        // Function
-                        auto params = parameters(')');
-                        consume(")", "expected ')' to follow parameter list");
-                        AstNode* return_type{};
-                        if (match("->")) {
-                            return_type = expression(Operator::TypeAnnotation);
-                        }
-                        if (match("{")) {
-                            // Function Implementation
-                            auto body = finish_block();
-                            return new AstFunction{{AstNodeType::Function}, params, return_type, body};
-                        } else {
-                            // Function Prototype
-                            return new AstFunction{{AstNodeType::Function}, params, return_type, {}};
-                        }
+                    if (auto func = maybe_function()) {
+                        return func;
                     } else {
                         // Grouping
+                        iter.advance();
                         auto expr = expression();
                         consume(")", "expected ')' to terminate group");
                         return expr;
                     }
+
                     break;
                 }
                 break;
             default:
         }
-        iter.decrement();
+
         return nullptr;
     }
 
@@ -494,7 +525,7 @@ struct Parser
         if (!lhs) {
             auto op_token = iter.advance();
             auto op = get_prefix_op(op_token.raw);
-            if (op == Operator::None) raise_error("expected valid lhs or prefix operator, git {}", op_token.raw);
+            if (op == Operator::None) raise_error("expected valid lhs or prefix operator, got {}", op_token.raw);
 
             auto rhs = expression(op);
             lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, op_token, rhs};
