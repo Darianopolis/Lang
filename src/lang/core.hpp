@@ -39,6 +39,10 @@ using c32 = char32_t;
 using byte = std::byte;
 
 // -----------------------------------------------------------------------------
+
+#define LANG_FORCEINLINE __attribute__((always_inline))
+
+// -----------------------------------------------------------------------------
 template<typename... Ts>
 struct overload_set : Ts... {
     using Ts::operator()...;
@@ -61,7 +65,9 @@ struct Defer
 
 // -----------------------------------------------------------------------------
 
-#define text_ansi_color(color, text) "\u001B[" #color "m" text "\u001B[0m"
+#define text_ansi_color_begin(color) "\u001B[" #color "m"
+#define text_ansi_color_reset "\u001B[0m"
+#define text_ansi_color(color, text) text_ansi_color_begin(color) text text_ansi_color_reset
 
 template<typename ...Args>
 void log_trace(std::format_string<Args...> fmt, Args&&... args)
@@ -96,7 +102,7 @@ void log_error(std::format_string<Args...> fmt, Args&&... args)
 // -----------------------------------------------------------------------------
 
 inline
-std::string indent_str(u32 depth, const char* indent = "  ")
+std::string indent_str(u32 depth, const char* indent = ". ")
 {
     std::string out;
     for (u32 i = 0; i < depth; ++i) {

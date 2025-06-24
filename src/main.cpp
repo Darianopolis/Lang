@@ -47,11 +47,20 @@ int main()
 
 std   :: @package("std");
 mylib := @package("com.foobar.mylib");
-@using(mylib);
 
-fib :: (n) {
-    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+foo : i32;
+bar :: foo = 42;
+
+mylib.pi : f64 : 3.1415;
+mylib.tau :: mlib.pi * 2;
+
+mylib.fib : (T: type, :T) -> T = (_, n) {
+    if n < 2 { n } else { mylib.fib(n - 1) + mylib.fib(n - 2) }
 };
+
+thing := for stuff -> (x) {
+    if pred(x) { break Some(x); }
+} else { None() };
 
 bar :: {
     123
@@ -59,8 +68,7 @@ bar :: {
 
 (a + b)[c](d);
 
-# TODO: Support this - var_decl as an operator
-# std.min :: (x, y) { if x <= { x } else { y } };
+std.min :: (x, y) { if x <= y { x } else { y } };
 
 main :: () {
     div := 2;
@@ -75,6 +83,10 @@ main :: () {
 
     println("fib({}) = {}", x, fib(x));
 };
+
+{
+    123
+}
 
 )";
 
@@ -124,10 +136,10 @@ main :: () {
     auto indent_str = "  ";
     auto indent = 0;
 
-    for (auto iter = tokens.begin(); iter; ++iter) {
-        auto token = *iter;
-        auto matched = iter.matching_pair_for(token);
-        if (matched && matched.index() < iter.index()) {
+    for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
+        auto token = iter.peek();
+        auto matched = tokens.matching_pair_for(token);
+        if (!matched.is_at_end() && matched.index() < iter.index()) {
             indent--;
         }
 
@@ -138,7 +150,7 @@ main :: () {
         message += token.raw;
         log_info("{}", message);
 
-        if (matched && matched.index() > iter.index()) {
+        if (!matched.is_at_end() && matched.index() > iter.index()) {
             indent++;
         }
     }

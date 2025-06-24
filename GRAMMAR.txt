@@ -38,9 +38,6 @@ BinaryOperator
 InfixExpr
     Expr BinaryOperator Expr
 
-Return
-    'return' Expr
-
 PrefixExpr
     '+' Expr    -- Arithmetic identity
     '-' Expr    -- Arithmetic negation
@@ -49,7 +46,9 @@ PrefixExpr
     '++' Expr   -- Pre-increment
     '--' Expr   -- Pre-decrement
 
-    Return
+MaybePrefixExpr
+    'break' Expr?
+    'return' Expr?
 
 Argument
     Expr
@@ -79,26 +78,28 @@ Terminal
     Number
     String
     Identifier
-
-LoopControlFlow
-    'break'
     'continue'
 
-VarDecl
-    Identifier (':' Expr? ('=' Expr)?)?
+TypeAnnotation
+    ':' Expr? ('=' Expr)?
 
-TypeDecl
-    ':' Expr ('=' Expr)?
+VarInit
+    '=' Expr?
+
+VarDecl
+    Expr TypeDecl?
+
+Field
+    Identifier TypeDecl?
 
 Fields
-    (VarDecl ';')*
+    (Field ';')*
 
 Struct
     '@struct' '{' Fields '}'
 
 Parameter
-    VarDecl
-    TypeDecl
+    Identifier? TypeDecl?
 
 Parameters
     CommaSeparatedList(Parameter)
@@ -123,7 +124,6 @@ Group
 
 PureExpr
     Terminal
-    LoopControlFlow
 
     Struct
     Function
@@ -132,20 +132,20 @@ PureExpr
 
     InfixExpr
     PrefixExpr
+    MaybePrefixExpr
     PostfixExpr
 
 Else
     'else' BlockExpr
-    'else' If
 
 If
     'if' Expr Block Else?
 
 For
-    'for' Expr '->' '(' Parameters ')' Block
+    'for' Expr '->' '(' Parameters ')' Block Else?
 
 While
-    'while' Expr Block
+    'while' Expr Block Else?
 
 Defer
     'defer' Block

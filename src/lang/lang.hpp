@@ -73,7 +73,6 @@ constexpr std::array PunctuationSequences
 
 // -----------------------------------------------------------------------------
 
-
 #define LANG_OPS_Postfix \
     X(Call) X(Subscript) X(FieldAccess) X(Postincrement) X(Postdecrement) X(Dereference)
 
@@ -96,10 +95,16 @@ constexpr std::array PunctuationSequences
 #define LANG_OPS_Range \
     X(Range_Exclusive) X(Range_Inclusive)
 
+#define LANG_OPS_VarDecl \
+    X(VarDecl)
+
 #define LANG_OPS_Assign \
     X(Assign) \
     X(Assign_Add) X(Assign_Subtract) X(Assign_Multiply) X(Assign_Divide) X(Assign_Modulo) X(Assign_Exponentiate) \
     X(Assign_ShiftLeft) X(Assign_ShiftRight) X(Assign_Xor) X(Assign_Bitwise_And) X(Assign_Bitwise_Or)
+
+#define LANG_OPS_ControlFlow \
+    X(Break) X(Return)
 
 #define LANG_OPS_All \
     LANG_OPS_Postfix \
@@ -109,15 +114,16 @@ constexpr std::array PunctuationSequences
     LANG_OPS_Logical \
     LANG_OPS_Comparison \
     LANG_OPS_Range \
-    X(TypeAnnotation) \
-    LANG_OPS_Assign
+    LANG_OPS_VarDecl \
+    LANG_OPS_Assign \
+    LANG_OPS_ControlFlow
 
 enum class Operator : u16
 {
     None,
 
 #define X(i) i,
-LANG_OPS_All
+    LANG_OPS_All
 #undef X
 };
 
@@ -128,7 +134,7 @@ std::string_view get_op_name(Operator op)
         case Operator::None: return "None";
 
 #define X(o) case Operator::o: return #o;
-LANG_OPS_All
+        LANG_OPS_All
 #undef X
     }
 }
@@ -150,8 +156,25 @@ constexpr OperatorString make_opstr(std::string_view op)
     return make_opstr(op.data(), u32(op.size()));
 }
 
-constexpr Operator get_prefix_op(std::string_view op)
+enum class ExpressionMode
 {
+    Normal,
+    TypeAnnotation,
+};
+
+constexpr std::string_view get_expr_mode_name(ExpressionMode mode)
+{
+    switch (mode) {
+        case ExpressionMode::Normal: return "Normal";
+        case ExpressionMode::TypeAnnotation: return "TypeAnnotation";
+    }
+}
+
+constexpr Operator get_prefix_op(std::string_view op, ExpressionMode mode)
+{
+    if (op == "break") return Operator::Break;
+    if (op == "return") return Operator::Return;
+
     switch (make_opstr(op)) {
         case make_opstr("&"): return Operator::AddressOf;
 
@@ -166,7 +189,7 @@ constexpr Operator get_prefix_op(std::string_view op)
     return Operator::None;
 }
 
-constexpr Operator get_other_op(std::string_view op)
+constexpr Operator get_other_op(std::string_view op, ExpressionMode mode)
 {
     switch (make_opstr(op)) {
         case make_opstr("^"):   return Operator::Dereference;
@@ -202,7 +225,9 @@ constexpr Operator get_other_op(std::string_view op)
         case make_opstr(".."):  return Operator::Range_Exclusive;
         case make_opstr("..="): return Operator::Range_Inclusive;
 
-        case make_opstr("="):   return Operator::Assign;
+        case make_opstr("="):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::Assign;
+        case make_opstr(":"):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::VarDecl;
+
         case make_opstr("+="):  return Operator::Assign_Add;
         case make_opstr("-="):  return Operator::Assign_Subtract;
         case make_opstr("*="):  return Operator::Assign_Multiply;
@@ -363,15 +388,17 @@ struct TokenIterator
         Token token;
         Internal(): _{} { }
     } _internal;
-          Token    operator *()    { return is_at_end() ? EofToken : list->tokens[current]; }
-    const Token*   operator->()    { _internal.token = **this; return &_internal.token; }
-    TokenIterator  operator++()    { return {list, current + 1}; }
-    TokenIterator  operator--()    { return {list, current - 1}; };
-    TokenIterator& operator++(int) { current++; return *this; }
-    TokenIterator& operator--(int) { current--; return *this; };
-    TokenIterator  operator+(i32 o) { return {list, current + u32(o)}; };
-    TokenIterator  operator-(i32 o) { return {list, current - u32(o)}; };
+          Token    operator *()      { return is_at_end() ? EofToken : list->tokens[current]; }
+    const Token*   operator->()      { _internal.token = **this; return &_internal.token; }
+    TokenIterator& operator++()      { current++; return *this; }
+    TokenIterator& operator--()      { current--; return *this; };
+    TokenIterator  operator++(int)   { auto copy = *this; current++; return copy; }
+    TokenIterator  operator--(int)   { auto copy = *this; current--; return copy; }
+    TokenIterator  operator +(i32 o) { return {list, current + u32(o)}; };
+    TokenIterator  operator -(i32 o) { return {list, current - u32(o)}; };
+
     bool operator==(const TokenIterator& other) const { return index() == other.index(); };
+    operator bool() const { return !is_at_end(); }
 };
 
 inline
@@ -386,6 +413,20 @@ inline
 TokenIterator TokenList::begin() const
 {
     return TokenIterator{this, 0};
+}
+
+constexpr bool is_end_of_expression_token(Token token)
+{
+    switch (make_opstr(token.raw)) {
+        case make_opstr(")"):
+        case make_opstr("}"):
+        case make_opstr("]"):
+        case make_opstr(";"):
+        case make_opstr(","):
+            return true;
+        default:
+            return false;
+    }
 }
 
 TokenList scan(std::string_view);
@@ -482,7 +523,7 @@ struct AstNodeListBuilder
 
 struct AstVarDecl : AstNode
 {
-    Token name;
+    AstNode* target;
     AstNode* type_expr{};
     bool constant = true;
     AstNode* init{};
@@ -511,6 +552,7 @@ struct AstWhile : AstNode
 {
     AstNode* cond{};
     AstNode* body{};
+    AstNode* else_expr{};
 };
 
 struct AstFor : AstNode
@@ -518,6 +560,7 @@ struct AstFor : AstNode
     AstNode* range_expr;
     AstNodeList parameters;
     AstNode* body;
+    AstNode* else_expr{};
 };
 
 struct AstBlock : AstNode
@@ -538,8 +581,10 @@ struct AstNamedReference : AstNode
 
 struct AstOpExpr : AstNode
 {
-    AstNode* lhs{};
     Token token;
+    Operator op;
+
+    AstNode* lhs{};
     AstNode* rhs{};
 };
 
@@ -602,139 +647,140 @@ inline
 void debug_print(AstNodeList tree)
 {
     auto print_root = [&](this auto&& print_node, AstNode* _node, u32 depth) -> void {
-        auto indent = [&] {
-            for (u32 i = 0; i < depth; ++i) {
-                std::print(". ");
-            }
+        auto print = [&]<class ...Args>(const std::format_string<Args...> fmt, Args&&...args) {
+            auto msg = std::format(fmt, std::forward<Args>(args)...);
+            log_info("{}{}", indent_str(depth, ". "), msg);
         };
 
-        auto println = [&]<class ...Args>(const std::format_string<Args...> fmt, Args&&...args) {
-            indent();
-            std::println(fmt, std::forward<Args>(args)...);
+// #define HEADING_INDENT depth++
+// #define HEADING_PREFIX ""
+
+#define HEADING_INDENT
+#define HEADING_PREFIX "."
+
+        auto print_block_body = [&](const AstNode* body) {
+            auto& node = *static_cast<const AstBlock*>(body);
+            for (auto s = node.statements.head; s; s = s->next) {
+                print_node(s, depth + 1);
+            }
+            if (node.terminal_expression) {
+                print_node(node.terminal_expression, depth + 1);
+            }
         };
 
         visit(overload_set {
             [&](const AstVarDecl& node) {
-                println("Var_Decl({}){}", node.name.raw, node.constant ? " const" : "");
-                depth++;
+                print("Var_Decl(const = {})", node.constant);
+                print_node(node.target, depth + 1);
+                HEADING_INDENT;
                 if (node.type_expr) {
-                    println("Type_Expr");
+                    print(HEADING_PREFIX "Type_Expr");
                     print_node(node.type_expr, depth + 1);
                 }
                 if (node.init) {
-                    println("Init");
+                    print(HEADING_PREFIX "Init");
                     print_node(node.init, depth + 1);
                 }
             },
             [&](const AstBlock& node) {
-                println("Block");
-                for (auto s = node.statements.head; s; s = s->next) {
-                    print_node(s, depth + 1);
-                }
-                if (node.terminal_expression) {
-                    depth++;
-                    println("TerminalExpression");
-                    print_node(node.terminal_expression, depth + 1);
-                }
+                print("Block");
+                print_block_body(&node);
             },
             [&](const AstFunction& node) {
-                println("Function");
-                depth++;
+                print("Function");
+                HEADING_INDENT;
                 if (node.parameters.head) {
-                    println("Parameters");
+                    print(HEADING_PREFIX "Parameters");
                     for (auto p = node.parameters.head; p; p = p->next) {
                         print_node(p, depth + 1);
                     }
                 }
                 if (node.return_type) {
-                    println("Return_Type");
+                    print(HEADING_PREFIX "Return_Type");
                     print_node(node.return_type, depth + 1);
                 }
                 if (node.body) {
-                    println("Body");
-                    print_node(node.body, depth + 1);
+                    print(HEADING_PREFIX "Body");
+                    print_block_body(node.body);
                 }
             },
             [&](const AstCall& node) {
                 if (node.token.raw == "(") {
-                    println("Call");
+                    print("Call");
                 } else {
-                    println("Subscript");
+                    print("Subscript");
                 }
-                depth++;
-                print_node(node.callee, depth);
+                HEADING_INDENT;
+                print_node(node.callee, depth + 1);
                 if (node.arguments.head) {
-                    println("Args");
+                    print(HEADING_PREFIX "Args");
                     for (auto arg = node.arguments.head; arg; arg = arg->next) {
                         print_node(arg, depth + 1);
                     }
                 }
             },
             [&](const AstCallNamedArgument& node) {
-                println("NamedArgument({})", node.field.raw);
+                print("NamedArgument({})", node.field.raw);
                 print_node(node.expr, depth + 1);
             },
             [&](const AstLiteral& node) {
-                println("Literal({})", node.token.raw);
+                print("Literal({})", node.token.raw);
             },
             [&](const AstNamedReference& node) {
-                println("Named_Reference({})", node.token.raw);
+                print("Named_Reference({})", node.token.raw);
             },
             [&](const AstOpExpr& node) {
-                if (node.lhs && node.rhs) {
-                    // println("Infix_Operator('{}')", node.token.punctuation.value);
-                    println("Operator({})", get_op_name(get_other_op(node.token.raw)));
-                    print_node(node.lhs, depth + 1);
-                    print_node(node.rhs, depth + 1);
-                } else if (node.lhs) {
-                    // println("Postfix_Operator('{}')", node.token.punctuation.value);
-                    println("Operator({})", get_op_name(get_other_op(node.token.raw)));
-                    print_node(node.lhs, depth + 1);
-                } else {
-                    // println("Prefix_Operator('{}')", node.token.punctuation.value);
-                    println("Operator({})", get_op_name(get_prefix_op(node.token.raw)));
-                    print_node(node.rhs, depth + 1);
-                }
+                print("Operator({})", get_op_name(node.op));
+                if (node.lhs) print_node(node.lhs, depth + 1);
+                if (node.rhs) print_node(node.rhs, depth + 1);
             },
             [&](const AstFieldAccess& node) {
-                println("Field_Access({})", node.field.raw);
+                print("Field_Access({})", node.field.raw);
                 print_node(node.lhs, depth + 1);
             },
             [&](const AstIf& node) {
-                println("If");
-                depth++;
-                println("Condition");
+                print("If");
+                HEADING_INDENT;
+                print(HEADING_PREFIX "Condition");
                 print_node(node.cond, depth + 1);
-                println("Then");
-                print_node(node.then_branch, depth + 1);
+                print(HEADING_PREFIX "Then");
+                print_block_body(node.then_branch);
                 if (node.else_branch) {
-                    println("Else");
-                    print_node(node.else_branch, depth + 1);
+                    print(HEADING_PREFIX "Else");
+                    print_block_body(node.else_branch);
                 }
             },
             [&](const AstFor& node) {
-                println("For");
-                depth++;
-                println("Range_Expression");
+                print("For");
+                HEADING_INDENT;
+                print(HEADING_PREFIX "Range_Expression");
                 print_node(node.range_expr, depth + 1);
-                println("Parameters");
+                print(HEADING_PREFIX "Parameters");
                 for (auto p = node.parameters.head; p; p = p->next) {
                     print_node(p, depth + 1);
                 }
-                println("Body");
-                print_node(node.body, depth + 1);
+                print(HEADING_PREFIX "Body");
+                print_block_body(node.body);
+                if (node.else_expr) {
+                    print(HEADING_PREFIX "Else");
+                    print_block_body(node.else_expr);
+                }
             },
             [&](const AstWhile& node) {
-                println("While");
-                depth++;
-                println("Condition");
+                print("While");
+                HEADING_INDENT;
+                print(HEADING_PREFIX "Condition");
                 print_node(node.cond, depth + 1);
-                println("Body");
-                print_node(node.body, depth + 1);
+                print(HEADING_PREFIX "Body");
+                print_block_body(node.body);
+                if (node.else_expr) {
+                    print(HEADING_PREFIX "Else");
+                    print_block_body(node.else_expr);
+                }
             },
             [&](const AstDefer& node) {
-                println("Defer");
-                print_node(node.body, depth + 1);
+                print("Defer");
+                print_block_body(node.body);
             },
             [&](const auto& node) {
                 log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));

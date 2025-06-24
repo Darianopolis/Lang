@@ -90,7 +90,7 @@ auto OperatorOrdering = []{
         { LANG_OPS_Comparison },
         { LANG_OPS_Logical },
         { LANG_OPS_Range },
-        { TypeAnnotation }
+        { LANG_OPS_ControlFlow },
     });
 
     // Post-/Pre-fix
@@ -117,11 +117,14 @@ auto OperatorOrdering = []{
     order(             {{ Logical_And }, { Logical_Or }});
     assoc(LeftToRight, {{ Logical_And }, { Logical_Or }});
 
-    // Assignment
+    // Assignment / Variable Declaration
 
     order({{ LANG_OPS_Prefix }, { LANG_OPS_Assign }});
     bind(Right,
-        { LANG_OPS_Assign },
+        {
+            LANG_OPS_Assign
+            LANG_OPS_VarDecl
+        },
         {
             LANG_OPS_Postfix
             LANG_OPS_Arithmetic
@@ -131,10 +134,12 @@ auto OperatorOrdering = []{
             LANG_OPS_Range
         });
     assoc(RightToLeft, {{ LANG_OPS_Assign }});
+    bind(Right, { LANG_OPS_VarDecl }, { LANG_OPS_Assign });
 
-    // Type Annotation
+    // Control Flow
 
-    bind(Left, { TypeAnnotation }, { LANG_OPS_Assign });
+    bind(Right, { LANG_OPS_VarDecl }, { LANG_OPS_ControlFlow });
+    bind(Right, { LANG_OPS_ControlFlow }, { LANG_OPS_Assign });
 
     // Output
 
@@ -156,9 +161,9 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
 #if LANG_NOISY_PARSER
 #define LANG_PARSER_TRACE_FUNC(fmt, ...) \
     auto _func_name = __func__; \
-    log_debug("{}{}(" fmt ") {{", indent_str(_depth), __func__ __VA_OPT__(,) __VA_ARGS__); \
+    log_debug("{}{}(" fmt ")", indent_str(_depth, ". "), _func_name __VA_OPT__(,) __VA_ARGS__); \
     _depth++; \
-    defer { _depth--; log_debug("{}}} {}", indent_str(_depth), _func_name); }
+    defer { _depth--; log_trace(text_ansi_color_reset "{}" text_ansi_color_begin(90) "{}", indent_str(_depth, ". "), _func_name); }
 #else
 #define LANG_PARSER_TRACE_FUNC(...)
 #endif
@@ -193,21 +198,20 @@ struct Parser
 
 // -------------------------------------------------------------------------
 
+    AstNode* maybe_else()
+    {
+        LANG_PARSER_TRACE_FUNC("");
+
+        return match("else") ? block_expr() : nullptr;
+    }
+
     AstIf* finish_if()
     {
         LANG_PARSER_TRACE_FUNC("");
 
         auto expr = expression();
         auto then_branch = block_expr();
-
-        AstNode* else_branch{};
-        if (match("else")) {
-            if (match("if")) {
-                else_branch = finish_if();
-            } else {
-                else_branch = block_expr();
-            }
-        }
+        auto else_branch = maybe_else();
 
         return new AstIf{{AstNodeType::If}, expr, then_branch, else_branch};
     }
@@ -218,7 +222,6 @@ struct Parser
 
         auto range_expr = expression();
 
-        // TODO: Ambiguity with function syntax?
         consume("->", "expected '->' after for range expression");
 
         consume("(", "expected parameter list in for");
@@ -226,8 +229,9 @@ struct Parser
         consume(")", "expected ')' to follow parameter list");
 
         auto body = block();
+        auto else_expr = maybe_else();
 
-        return new AstFor{{AstNodeType::For}, range_expr, params, body};
+        return new AstFor{{AstNodeType::For}, range_expr, params, body, else_expr};
     }
 
     AstWhile* finish_while()
@@ -236,7 +240,9 @@ struct Parser
 
         auto cond = expression();
         auto body = block();
-        return new AstWhile{{AstNodeType::While}, cond, body};
+        auto else_expr = maybe_else();
+
+        return new AstWhile{{AstNodeType::While}, cond, body, else_expr};
     }
 
     AstNode* maybe_block_expr()
@@ -289,19 +295,6 @@ struct Parser
         // Defer
 
         if (auto stmt = maybe_defer()) return {stmt, false};
-
-        // Variable declaration
-
-        if (iter.peek().type == TokenType::Identifier && iter.peek_next().raw == ":") {
-            auto decl = var_decl();
-
-            consume(";", "expected ';' after declaration statement");
-
-            // if (!is_ast_node_block_expr(decl->init)) {
-            //     consume(";", "expected ';' after declaration with non block-expression init");
-            // }
-            return {decl, false};
-        }
 
         // Expression statement
 
@@ -362,45 +355,24 @@ struct Parser
         return stmts.to_list();
     }
 
-    AstVarDecl* var_decl()
+    AstVarDecl* parameter()
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        // TODO: Evaluate declarations as an expression part
-        // TODO: Init should be parsed as block expression first if possible
-
+        AstNode* target{};
         auto ident = iter.peek();
         if (ident.type == TokenType::Identifier) {
             iter.advance();
-        } else if (ident.raw == ":") {
-            ident = InvalidToken;
-        } else {
-            raise_error("expected identifier or ':' to begin var decl");
+            target = new AstNamedReference{{AstNodeType::NamedReference}, ident};
+        } else if (ident.raw != ":") {
+            raise_error("expected identifier or ':' to begin parameter");
         }
-
-        AstNode* type_expr{};
-        AstNode* init{};
-        bool constant = true;
 
         if (match(":")) {
-            if (!is("=") && !is(":")) {
-                type_expr = expression(Operator::TypeAnnotation);
-            }
-
-            bool has_init = false;
-            if (match("=")) {
-                has_init = true;
-                constant = false;
-            } else if (match(":")) {
-                has_init = true;
-            }
-            if (has_init) {
-                // init = maybe_function();
-                if (!init) init = expression();
-            }
+            return finish_var_decl(target);
+        } else {
+            return new AstVarDecl{{AstNodeType::VarDecl}, target, nullptr, false, nullptr};
         }
-
-        return new AstVarDecl{{AstNodeType::VarDecl}, ident, type_expr, constant, init};
     }
 
     AstNodeList parameters(u8 end)
@@ -412,7 +384,7 @@ struct Parser
         for (;;) {
             if (iter.peek().raw[0] == end) break;
 
-            params.append(var_decl());
+            params.append(parameter());
 
             if (!match(",")) break;
         }
@@ -445,6 +417,7 @@ struct Parser
         return args.to_list();
     }
 
+    LANG_FORCEINLINE
     AstNode* maybe_function()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -461,7 +434,7 @@ struct Parser
         consume(")", "expected ')' to follow parameter list");
         AstNode* return_type{};
         if (match("->")) {
-            return_type = expression(Operator::TypeAnnotation);
+            return_type = expression(Operator::None, ExpressionMode::TypeAnnotation);
         }
         if (match("{")) {
             // Function Implementation
@@ -473,6 +446,7 @@ struct Parser
         }
     }
 
+    LANG_FORCEINLINE
     AstNode* maybe_non_recursive_expression()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -517,34 +491,70 @@ struct Parser
         return nullptr;
     }
 
-    AstNode* expression(Operator left_op = Operator::None)
+    AstVarDecl* finish_var_decl(AstNode* target)
     {
-        LANG_PARSER_TRACE_FUNC("left_op = '{}'", get_op_name(left_op));
+        LANG_PARSER_TRACE_FUNC("");
+
+        AstNode* type_expr{};
+        bool constant = true;
+
+        if (!is("=") && !is(":")) {
+            type_expr = expression(Operator::None, ExpressionMode::TypeAnnotation);
+        }
+
+        bool has_init = false;
+        if (match("=")) {
+            has_init = true;
+            constant = false;
+        } else if (match(":")) {
+            has_init = true;
+        } else {
+            constant = false;
+        }
+
+        if (has_init) {
+            auto rhs = expression(Operator::VarDecl);
+            return new AstVarDecl{{AstNodeType::VarDecl}, target, type_expr, constant, rhs};
+        } else {
+            return new AstVarDecl{{AstNodeType::VarDecl}, target, type_expr, constant, nullptr};
+        }
+    }
+
+    AstNode* expression(Operator left_op = Operator::None, ExpressionMode mode = ExpressionMode::Normal)
+    {
+        LANG_PARSER_TRACE_FUNC("left_op = '{}', mode = '{}'", get_op_name(left_op), get_expr_mode_name(mode));
 
         auto lhs = maybe_non_recursive_expression();
         if (!lhs) {
             auto op_token = iter.advance();
-            auto op = get_prefix_op(op_token.raw);
+            auto op = get_prefix_op(op_token.raw, mode);
             if (op == Operator::None) raise_error("expected valid lhs or prefix operator, got {}", op_token.raw);
 
-            auto rhs = expression(op);
-            lhs = new AstOpExpr{{AstNodeType::OpExpr}, {}, op_token, rhs};
+            if ((op == Operator::Break || op == Operator::Return) && is_end_of_expression_token(iter.peek())) {
+                // TODO: Generalize this for all mixed prefix/nonfix operators?
+                lhs = new AstOpExpr{{AstNodeType::OpExpr}, op_token, op, {}, {}};
+            } else {
+                auto rhs = expression(op, mode);
+                lhs = new AstOpExpr{{AstNodeType::OpExpr}, op_token, op, {}, rhs};
+            }
         }
 
         for (;;) {
             auto op_token = iter.peek();
 
-            auto op = get_other_op(op_token.raw);
+            auto op = get_other_op(op_token.raw, mode);
             if (op == Operator::None) {
-                log_trace("unrecognised operator '{}', breaking", op_token.raw);
+// #if LANG_NOISY_PARSER
+//                 log_debug("{}unrecognised operator '{}', breaking", indent_str(_depth), op_token.raw);
+// #endif
                 break;
             }
 
             auto dir = get_op_bind_dir(left_op, op);
 
-#if LANG_NOISY_PARSER
-            log_debug("{}({}, {}) = {}", indent_str(_depth), get_op_name(left_op), get_op_name(op), get_dir_name(dir));
-#endif
+// #if LANG_NOISY_PARSER
+//             log_debug("{}({}, {}) = {}", indent_str(_depth), get_op_name(left_op), get_op_name(op), get_dir_name(dir));
+// #endif
             if (dir == BindingDirection::Invalid) {
                 raise_error("ambiguous operator sequence (no ordering for '{}' and '{}'), use parenthesis",
                     get_op_name(left_op), get_op_name(op));
@@ -554,7 +564,11 @@ struct Parser
             }
 
             iter.advance();
-            if (is_op_postfix(op)) {
+            if (op == Operator::VarDecl) {
+                // Variable Declaration
+                lhs = finish_var_decl(lhs);
+
+            } else  if (is_op_postfix(op)) {
                 if (op_token.raw == ".") {
                     // Field accesss
                     auto field = iter.advance();
@@ -572,11 +586,11 @@ struct Parser
                     consume(")", "expected ')' to terminate call");
                     lhs = new AstCall{{AstNodeType::Call}, lhs, op_token, args};
                 } else {
-                    lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op_token, {}};
+                    lhs = new AstOpExpr{{AstNodeType::OpExpr}, op_token, op, lhs, {}};
                 }
             } else {
-                auto rhs = expression(op);
-                lhs = new AstOpExpr{{AstNodeType::OpExpr}, lhs, op_token, rhs};
+                auto rhs = expression(op, mode);
+                lhs = new AstOpExpr{{AstNodeType::OpExpr}, op_token, op, lhs, rhs};
             }
         }
 
