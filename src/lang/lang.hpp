@@ -5,7 +5,7 @@
 #include <vector>
 #include <variant>
 
-LANG_NAMESPACE_BEGIN
+NAMESPACE_BEGIN(lang)
 
 // -----------------------------------------------------------------------------
 
@@ -68,7 +68,40 @@ constexpr std::array PunctuationSequences
     "..=",  // range inclusive
     ":",    // declaration / type annotation introducer / const init
 
+    ";",    // statement delimiter
+    ",",    // expression delimiter
+
     "?",    // *reserved
+};
+
+
+consteval std::string_view lang_str(std::string_view str)
+{
+    for (auto key : Keywords) if (str == key) return str;
+    for (auto punc : PunctuationSequences) if (str == punc) return str;
+
+    raise_error("Expected valid language string, got '{}'", str);
+}
+
+struct StaticLangString
+{
+    std::string_view str;
+
+    template<size_t Size>
+    consteval StaticLangString(const char (&str)[Size])
+        : str(lang_str(std::string_view(str)))
+    {}
+
+    consteval StaticLangString(std::string_view _str)
+        : str(lang_str(_str))
+    {}
+};
+
+struct RuntimeLangString
+{
+    std::string_view str;
+
+    explicit RuntimeLangString(std::string_view _str): str(_str) {}
 };
 
 // -----------------------------------------------------------------------------
@@ -151,9 +184,14 @@ constexpr OperatorString make_opstr(const char* op, u32 len)
     return OperatorString(hash);
 }
 
-constexpr OperatorString make_opstr(std::string_view op)
+constexpr OperatorString make_opstr(RuntimeLangString op)
 {
-    return make_opstr(op.data(), u32(op.size()));
+    return make_opstr(op.str.data(), u32(op.str.size()));
+}
+
+consteval OperatorString make_opstr(StaticLangString op)
+{
+    return make_opstr(op.str.data(), u32(op.str.size()));
 }
 
 enum class ExpressionMode
@@ -172,10 +210,10 @@ constexpr std::string_view get_expr_mode_name(ExpressionMode mode)
 
 constexpr Operator get_prefix_op(std::string_view op, ExpressionMode mode)
 {
-    if (op == "break") return Operator::Break;
-    if (op == "return") return Operator::Return;
+    if (op == lang_str("break")) return Operator::Break;
+    if (op == lang_str("return")) return Operator::Return;
 
-    switch (make_opstr(op)) {
+    switch (make_opstr(RuntimeLangString(op))) {
         case make_opstr("&"): return Operator::AddressOf;
 
         case make_opstr("++"): return Operator::Preincrement;
@@ -191,7 +229,7 @@ constexpr Operator get_prefix_op(std::string_view op, ExpressionMode mode)
 
 constexpr Operator get_other_op(std::string_view op, ExpressionMode mode)
 {
-    switch (make_opstr(op)) {
+    switch (make_opstr(RuntimeLangString(op))) {
         case make_opstr("^"):   return Operator::Dereference;
         case make_opstr("++"):  return Operator::Postincrement;
         case make_opstr("--"):  return Operator::Postdecrement;
@@ -417,7 +455,7 @@ TokenIterator TokenList::begin() const
 
 constexpr bool is_end_of_expression_token(Token token)
 {
-    switch (make_opstr(token.raw)) {
+    switch (make_opstr(RuntimeLangString(token.raw))) {
         case make_opstr(")"):
         case make_opstr("}"):
         case make_opstr("]"):
@@ -793,4 +831,4 @@ void debug_print(AstNodeList tree)
     }
 }
 
-LANG_NAMESPACE_END
+NAMESPACE_END

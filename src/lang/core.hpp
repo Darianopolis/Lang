@@ -8,14 +8,12 @@
 
 #include <string.h>
 
-#define LANG_NAMESPACE_BEGIN namespace lang {
-#define LANG_NAMESPACE_END } // :lang
-#define LANG_NAMESPACE_USE using namespace lang;
+#define NAMESPACE_BEGIN(name) namespace name {
+#define NAMESPACE_SWITCH(name) } namespace name {
+#define NAMESPACE_END }
+#define NAMESPACE_USE(name) using namespace name;
 
-#define UNNAMED_NAMESPACE_BEGIN namespace {
-#define UNNAMED_NAMESPACE_END } // :anonymous
-
-LANG_NAMESPACE_BEGIN
+NAMESPACE_BEGIN(lang)
 
 // -----------------------------------------------------------------------------
 
@@ -157,10 +155,10 @@ T unix_check_(T res, UnixErrorBehaviour check, auto... allowed)
     raise_unix_error("unix_check", error_code);
 }
 
-#define unix_check_null(func, ...)                       unix_check_((func), UnixErrorBehaviour::RetNull     __VA_OPT__(,) __VA_ARGS__)
-#define unix_check_n1(func, ...)                         unix_check_((func), UnixErrorBehaviour::RetNeg1     __VA_OPT__(,) __VA_ARGS__)
-#define unix_check_ne(func, ...)                         unix_check_((func), UnixErrorBehaviour::RetNegErrno __VA_OPT__(,) __VA_ARGS__)
-#define unix_check_ce(func, ...) [&] { errno = 0; return unix_check_((func), UnixErrorBehaviour::CheckErrno  __VA_OPT__(,) __VA_ARGS__); }()
+#define unix_check_null(func, ...)                         unix_check_((func), UnixErrorBehaviour::RetNull     __VA_OPT__(,) __VA_ARGS__)
+#define unix_check_n1(  func, ...)                         unix_check_((func), UnixErrorBehaviour::RetNeg1     __VA_OPT__(,) __VA_ARGS__)
+#define unix_check_ne(  func, ...)                         unix_check_((func), UnixErrorBehaviour::RetNegErrno __VA_OPT__(,) __VA_ARGS__)
+#define unix_check_ce(  func, ...) [&] { errno = 0; return unix_check_((func), UnixErrorBehaviour::CheckErrno  __VA_OPT__(,) __VA_ARGS__); }()
 
 // -----------------------------------------------------------------------------
 
@@ -206,4 +204,4 @@ int take_fd(int& fd)
 #define decl_self_nullable(var) auto* self = get_impl(var)
 #define decl_self(var) decl_self_nullable(var); if (!self) raise_error("self: nullptr")
 
-LANG_NAMESPACE_END
+NAMESPACE_END

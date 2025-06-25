@@ -7,7 +7,7 @@
 
 #include <simdutf.h>
 
-LANG_NAMESPACE_USE
+NAMESPACE_USE(lang)
 
 std::string read_file(std::string_view path)
 {
@@ -54,7 +54,7 @@ bar :: foo = 42;
 mylib.pi : f64 : 3.1415;
 mylib.tau :: mlib.pi * 2;
 
-mylib.fib : (T: type, :T) -> T = (_, n) {
+mylib.fib : (n) -> @typeof(n) = (n) {
     if n < 2 { n } else { mylib.fib(n - 1) + mylib.fib(n - 2) }
 };
 
@@ -87,6 +87,9 @@ main :: () {
 {
     123
 }
+
+print(x);
+x :: 123;
 
 )";
 

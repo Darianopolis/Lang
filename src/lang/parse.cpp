@@ -4,7 +4,7 @@
 
 #include <source_location>
 
-LANG_NAMESPACE_BEGIN
+NAMESPACE_BEGIN(lang)
 
 enum class BindingDirection : u8
 {
@@ -36,9 +36,11 @@ auto OperatorOrdering = []{
                 if (cur_dir == BindingDirection::Invalid) {
                     // log_trace("op({}, {}) = {}", get_op_name(l), get_op_name(r), get_dir_name(dir));
                 } else if (cur_dir != dir) {
-                    raise_error("op({}, {}) = [{}] contradicts earlier assignment to [{}]", get_op_name(l), get_op_name(r), get_dir_name(dir), get_dir_name(cur_dir));
+                    raise_error("op({}, {}) = [{}] contradicts earlier assignment to [{}]",
+                        get_op_name(l), get_op_name(r), get_dir_name(dir), get_dir_name(cur_dir));
                 } else {
-                    log_warn("  redundant assignment of op({}, {}) to = {}", get_op_name(l), get_op_name(r), get_dir_name(dir));
+                    log_warn("  redundant assignment of op({}, {}) to = {}",
+                        get_op_name(l), get_op_name(r), get_dir_name(dir));
                 }
                 cur_dir = dir;
             }
@@ -106,7 +108,7 @@ auto OperatorOrdering = []{
     // Arithmetic infix
 
     order(             { { Power }, { Multiply, Divide }, { Add, Subtract } });
-    assoc(LeftToRight, { { Power }, { Multiply, Divide }, { Add, Subtract } });
+    assoc(LeftToRight, {            { Multiply, Divide }, { Add, Subtract } });
 
     // Bitwise infix
 
@@ -163,7 +165,10 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
     auto _func_name = __func__; \
     log_debug("{}{}(" fmt ")", indent_str(_depth, ". "), _func_name __VA_OPT__(,) __VA_ARGS__); \
     _depth++; \
-    defer { _depth--; log_trace(text_ansi_color_reset "{}" text_ansi_color_begin(90) "{}", indent_str(_depth, ". "), _func_name); }
+    defer { \
+        _depth--; \
+        log_trace(text_ansi_color_reset "{}" text_ansi_color_begin(90) "{}", indent_str(_depth, ". "), _func_name); \
+    }
 #else
 #define LANG_PARSER_TRACE_FUNC(...)
 #endif
@@ -176,23 +181,23 @@ struct Parser
     i32 _depth = 0;
 #endif
 
-    bool is(std::string_view raw)
+    bool is(StaticLangString raw)
     {
-        return iter.peek().raw == raw;
+        return iter.peek().raw == raw.str;
     }
 
-    bool match(std::string_view raw)
+    bool match(StaticLangString raw)
     {
-        if (iter.peek().raw == raw) {
+        if (iter.peek().raw == raw.str) {
             iter.advance();
             return true;
         }
         return false;
     }
 
-    void consume(std::string_view raw, std::string_view message)
+    void consume(StaticLangString raw, std::string_view message)
     {
-        if (iter.peek().raw != raw) raise_error("{}, got {}", message, iter.peek().raw);
+        if (iter.peek().raw != raw.str) raise_error("{}, got {}", message, iter.peek().raw);
         iter.advance();
     }
 
@@ -604,4 +609,4 @@ AstNodeList parse(TokenList& tokens)
     return parser.file();
 }
 
-LANG_NAMESPACE_END
+NAMESPACE_END

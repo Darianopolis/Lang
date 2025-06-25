@@ -55,6 +55,7 @@ target_include_directories(lang PUBLIC src)
 target_sources(lang PUBLIC
     src/main.cpp
     src/lang/scan.cpp
+    src/lang/parse.cpp
     )
 target_link_libraries(lang PUBLIC stdc++exp)
 target_link_libraries(lang PUBLIC simdutf::simdutf)

@@ -4,7 +4,7 @@
 
 #include <vector>
 
-LANG_NAMESPACE_BEGIN
+NAMESPACE_BEGIN(lang)
 
 inline
 const char* simdutf_err_to_string(simdutf::error_code code)
@@ -152,4 +152,4 @@ struct Utf8Iterator
 };
 #endif
 
-LANG_NAMESPACE_END
+NAMESPACE_END

@@ -2,9 +2,9 @@
 
 #include "unicode.hpp"
 
-LANG_NAMESPACE_USE
+NAMESPACE_USE(lang)
 
-UNNAMED_NAMESPACE_BEGIN
+NAMESPACE_BEGIN()
 
 #define LANG_WHITESPACE_CASES \
     case ' ': case '\n': case '\r': case '\t'
@@ -74,7 +74,7 @@ bool is_valid_identifier_continue_element(u8 c)
     return is_valid_identifier_start_element(c) || is_decimal_digit(c);
 }
 
-UNNAMED_NAMESPACE_END
+NAMESPACE_END
 
 struct ScanState
 {
