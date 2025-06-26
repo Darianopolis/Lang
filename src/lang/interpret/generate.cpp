@@ -87,7 +87,7 @@ void bytecode_debug_print(BytecodeChunk* chunk)
     auto print_instr = [](std::string_view instruction, std::string_view args_fmt, auto&&... args)
     {
         auto arg_str = std::format(std::runtime_format(args_fmt), args...);
-        log_info("[{:14}] {}", instruction, arg_str);
+        log_debug("[{:14}] {}", instruction, arg_str);
     };
 
     for (auto& instruction : chunk->bytecode) {

@@ -2,6 +2,21 @@
 
 NAMESPACE_BEGIN(lang)
 
+void CompileJobSystem::add_fragment(AstNode* n, FileContext* file_context)
+{
+    auto bytecode = bytecode_generate(n);
+
+    log_debug("");
+    log_debug("==== Fragment ====");
+    ast_debug_print(n);
+    log_debug("==== Bytecode ====");
+    bytecode_debug_print(bytecode);
+
+    auto context = execution_context_create(file_context, bytecode);
+    context->job_system = this;
+    unblocked.emplace_back(context);
+}
+
 void CompileJobSystem::try_unblock(CollectionAccess* access)
 {
     std::erase_if(blocked, [&](const std::pair<ExecutionContext*, CollectionAccess*>& pair) -> bool {
@@ -15,19 +30,6 @@ void CompileJobSystem::try_unblock(CollectionAccess* access)
         }
         return false;
     });
-}
-
-void CompileJobSystem::add_file_node_list(AstNodeList nodes, FileContext* file_context)
-{
-    log_debug("loading file fragment, generating bytecode for top level statements");
-    for (auto n = nodes.head; n; n = n->next) {
-        auto bytecode = bytecode_generate(n);
-        log_debug("--- chunk ---");
-        bytecode_debug_print(bytecode);
-        auto context = execution_context_create(file_context, bytecode);
-        context->job_system = this;
-        unblocked.emplace_back(context);
-    }
 }
 
 void CompileJobSystem::compile()

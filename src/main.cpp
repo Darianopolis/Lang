@@ -48,12 +48,14 @@ int main()
     // auto message = "1.5 * foo + 3 / math.pi - 5";
     auto message = R"(
 
+foo :: 2;
 1.5 * bar + 3 / math.pi - 5;
 
-foo :: 2;
+bar :: 3;
 1.5 * foo + 3 / math.tau - 5;
 
 math.tau :: math.pi * 2;
+math.pi  :: 3.14;
 
 x :: 2;
 x + y;
@@ -182,25 +184,22 @@ x :: 123;
     log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
 
     start = std::chrono::steady_clock::now();
-    auto node_list = parse(tokens);
+    auto fragments = parse(tokens);
     end = std::chrono::steady_clock::now();
 
     log_debug("parsed in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
 
-    debug_print(node_list);
-
-    log_debug("printed");
-
     auto file_context = file_context_create();
 
-    file_context->global->set("bar", tag_value(new Number{ .value = 3.0 }));
-
     auto math = tag_value(new Collection{});
-    math->set("pi", tag_value(new Number{ . value = std::numbers::pi }));
     file_context->global->set("math", math);
 
     CompileJobSystem job_system;
-    job_system.add_file_node_list(node_list, file_context);
+    for (auto fragment = fragments.head; fragment; fragment = fragment->next) {
+        job_system.add_fragment(fragment, file_context);
+    }
+
+    log_info("");
 
     log_debug("bytecode generated");
 

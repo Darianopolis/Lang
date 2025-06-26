@@ -189,8 +189,8 @@ struct CompileJobSystem
     std::vector<ExecutionContext*> unblocked;
     std::vector<std::pair<ExecutionContext*, ExecutionResult>> completed;
 
+    void add_fragment(AstNode* node, FileContext* file_context);
     void try_unblock(CollectionAccess* access);
-    void add_file_node_list(AstNodeList nodes, FileContext* file_context);
     void compile();
 };
 

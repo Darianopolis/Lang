@@ -682,12 +682,12 @@ bool is_ast_node_block_expr(AstNode* t)
 AstNodeList parse(TokenList& tokens);
 
 inline
-void debug_print(AstNodeList tree)
+void ast_debug_print(AstNode* root)
 {
     auto print_root = [&](this auto&& print_node, AstNode* _node, u32 depth) -> void {
         auto print = [&]<class ...Args>(const std::format_string<Args...> fmt, Args&&...args) {
             auto msg = std::format(fmt, std::forward<Args>(args)...);
-            log_info("{}{}", indent_str(depth, ". "), msg);
+            log_debug("{}{}", indent_str(depth, ". "), msg);
         };
 
 // #define HEADING_INDENT depth++
@@ -826,9 +826,7 @@ void debug_print(AstNodeList tree)
         }, _node);
     };
 
-    for (auto root = tree.head; root; root = root->next) {
-        print_root(root, 0);
-    }
+    print_root(root, 0);
 }
 
 NAMESPACE_END
