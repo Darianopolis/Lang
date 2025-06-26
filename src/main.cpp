@@ -4,6 +4,7 @@
 
 #include <lang/core.hpp>
 #include <lang/lang.hpp>
+#include <lang/interpret/interpret.hpp>
 
 #include <simdutf.h>
 
@@ -43,6 +44,10 @@ int main()
     // auto message = "a & b > c && d";
     // auto message = "main :: () { print(\"Hello, world\") }";
 
+    // auto message = "math.pi * 123 + min(456, 2)";
+    auto message = "1.5 * foo + 3 / math.pi - 5";
+
+#if 0
     auto message = R"(
 
 std   :: @package("std");
@@ -92,6 +97,7 @@ print(x);
 x :: 123;
 
 )";
+#endif
 
     auto start = std::chrono::steady_clock::now();
     auto tokens = scan(message);
@@ -170,4 +176,33 @@ x :: 123;
     debug_print(node);
 
     log_debug("printed");
+
+    auto* bytecode = bytecode_generate(node.head);
+    bytecode_debug_print(bytecode);
+
+    log_debug("bytecode generated");
+
+    auto file_context = file_context_create();
+
+    file_context->global->set("foo", tag_value(new Number{ .value = 2.0 }));
+
+    auto math = tag_value(new Collection{});
+    math->set("pi", tag_value(new Number{ . value = std::numbers::pi }));
+    file_context->global->set("math", math);
+
+    auto exec_ctx = execution_context_create(file_context, bytecode);
+    auto result = execution_context_run(exec_ctx);
+    switch (result.code) {
+        case lang::ExecutionResultCode::Success:
+            log_info("success, result = {}", value_to_string(result.value));
+            break;
+        case lang::ExecutionResultCode::Blocked:
+            log_info("execution was blocked");
+            break;
+        case lang::ExecutionResultCode::Error:
+            log_info("runtime error!");
+            break;
+    }
+
+    log_debug("bytecode interpreted");
 }
