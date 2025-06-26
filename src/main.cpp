@@ -44,8 +44,8 @@ int main()
     // auto message = "a & b > c && d";
     // auto message = "main :: () { print(\"Hello, world\") }";
 
-    // auto message = "math.pi * 123 + min(456, 2)";
-    // auto message = "1.5 * foo + 3 / math.pi - 5";
+//     auto message = R"(
+
     auto message = R"(
 
 foo :: 2;
@@ -60,6 +60,14 @@ math.pi  :: 3.14;
 x :: 2;
 x + y;
 y :: 5;
+
+z :: 4;
+
+{
+    x :: 2;
+    y :: 3;
+    x * { foo :: y; foo + 1 } - z
+}
 
     )";
 
@@ -181,17 +189,17 @@ x :: 123;
     }
 #endif
 
-    log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
+    log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
 
     start = std::chrono::steady_clock::now();
     auto fragments = parse(tokens);
     end = std::chrono::steady_clock::now();
 
-    log_debug("parsed in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
+    log_debug("parsed in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
 
     auto file_context = file_context_create();
 
-    auto math = tag_value(new Collection{});
+    auto math = tag_value(new Namespace{});
     file_context->global->set("math", math);
 
     CompileJobSystem job_system;

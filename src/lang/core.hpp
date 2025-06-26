@@ -36,6 +36,9 @@ using c32 = char32_t;
 
 using byte = std::byte;
 
+using f32 = float;
+using f64 = double;
+
 // -----------------------------------------------------------------------------
 
 #define LANG_FORCEINLINE __attribute__((always_inline))

@@ -8,17 +8,22 @@
 NAMESPACE_BEGIN(lang)
 
 #define OPCODE_LIST(DO) \
+    DO(LoadNil) \
     DO(LoadNumber) \
     DO(LoadString) \
-    DO(LoadNamedReference) \
+    DO(LoadGlobal) \
+    DO(LoadLocal) \
     \
     DO(CallFunction) \
     DO(CallSubscript) \
     \
     DO(FieldAccess) \
-    DO(VarDecl) \
+    DO(NamespaceVarDecl) \
     \
-    DO(Operator)
+    DO(Operator) \
+    \
+    DO(Pop) \
+    DO(PushDown)
 
 #define OPCODE_DECLARE(op, ...) op,
 
@@ -45,6 +50,8 @@ struct Instruction
         Operator op;
         u32 arg_count;
         bool decl_has_init;
+        u32 count;
+        u32 stack_index;
     };
 };
 
@@ -60,8 +67,8 @@ void bytecode_debug_print(BytecodeChunk*);
 
 #define VALUE_TYPE_LIST(DO) \
     DO(Number) \
-    DO(Collection) \
-    DO(CollectionAccess)
+    DO(Namespace) \
+    DO(NamespaceAccess)
 
 #define VALUE_TYPE_DECLARE(name, ...) name,
 
@@ -87,10 +94,10 @@ struct Value
 
 struct Number : Value
 {
-    double value;
+    f64 value;
 };
 
-struct Collection : Value
+struct Namespace : Value
 {
     ankerl::unordered_dense::map<std::string_view, Value*> values;
 
@@ -109,15 +116,15 @@ struct Collection : Value
     void set(std::string_view key, Value* value)
     {
         if (has(key)) {
-            raise_error("cannot reassign collection value");
+            raise_error("cannot reassign namespace value");
         }
         values.emplace(key, value);
     }
 };
 
-struct CollectionAccess : Value
+struct NamespaceAccess : Value
 {
-    Collection* collection;
+    Namespace* _namespace;
     Token field;
 };
 
@@ -140,7 +147,7 @@ std::string value_to_string(Value* value)
             return std::to_string(num->value);
         }
         default:
-            raise_error("value_to_string :: unsupported value type: {}", get_value_type_name(value->type));
+            return "?";
     }
 }
 
@@ -150,7 +157,7 @@ struct CompileJobSystem;
 
 struct FileContext
 {
-    Collection* global;
+    Namespace* global;
 };
 
 struct ExecutionContext
@@ -185,12 +192,12 @@ ExecutionResult execution_context_run(ExecutionContext* context);
 
 struct CompileJobSystem
 {
-    std::vector<std::pair<ExecutionContext*, CollectionAccess*>> blocked;
+    std::vector<std::pair<ExecutionContext*, NamespaceAccess*>> blocked;
     std::vector<ExecutionContext*> unblocked;
     std::vector<std::pair<ExecutionContext*, ExecutionResult>> completed;
 
     void add_fragment(AstNode* node, FileContext* file_context);
-    void try_unblock(CollectionAccess* access);
+    void try_unblock(NamespaceAccess* access);
     void compile();
 };
 

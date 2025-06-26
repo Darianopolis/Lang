@@ -6,62 +6,169 @@ BytecodeChunk* bytecode_generate(AstNode* node)
 {
     auto chunk = new BytecodeChunk{};
 
-    auto generate_root = [&](this auto&& generate_node, AstNode* _node) -> void {
-        auto emit = [&](Opcode opcode) -> auto& {
+    struct Local {
+        Token name{};
+        u32 index;
+    };
+
+    std::vector<Local> locals;
+
+    u32 stack_depth = 0;
+
+    // "yield" in this context refers to whether a node leaves a value on the stack
+    //   to be consumed in a subsequent operation
+
+    // TODO: Handle multiple yields
+    enum class YieldsValue { No, Yes };
+
+    auto generate_root = [&](this auto&& generate_node, AstNode* _node, bool is_root = false) -> YieldsValue {
+
+        auto emit = [&](Opcode opcode, i32 stack_change) -> auto& {
+            stack_depth += stack_change;
             return chunk->bytecode.emplace_back(opcode);
         };
 
-        visit(overload_set {
-            [&](const AstVarDecl& node) {
-                generate_node(node.target);
-                if (node.init) generate_node(node.init);
-                emit(Opcode::VarDecl).decl_has_init = bool(node.init);
+        auto generate_block_body = [&](const AstBlock& block) -> YieldsValue {
+            u32 initial_stack_depth = stack_depth;
+            u32 initial_local_depth = locals.size();
+            defer { locals.resize(initial_local_depth); };
+
+            AstNode* last_nonterminal{};
+            auto last_yielded = YieldsValue::No;
+
+            auto pop_if_yielded = [&] {
+                // TODO: Should we do this after every expression, or POP/PUSH_DOWN in bulk at the end of a scope?
+                if (last_yielded == YieldsValue::Yes) {
+                    emit(Opcode::Pop, -1).count = 1;
+                }
+            };
+
+            for (auto s = block.statements.head; s; s = s->next) {
+                pop_if_yielded();
+                last_yielded = generate_node(s);
+                last_nonterminal = s;
+            }
+
+            auto cleanup_stack = [&](YieldsValue should_yield) {
+                if (should_yield == YieldsValue::No) {
+                    auto pop_count = stack_depth - initial_stack_depth;
+                    emit(Opcode::Pop, -pop_count).count = pop_count;
+                } else {
+                    auto push_count = (stack_depth - initial_stack_depth) - 1;
+                    if (push_count > 0) {
+                        emit(Opcode::PushDown, -push_count).count = push_count;
+                    }
+                }
+            };
+
+            if (block.terminal_expression) {
+                pop_if_yielded();
+                last_yielded = generate_node(block.terminal_expression);
+                cleanup_stack(last_yielded);
+                return last_yielded;
+            } else {
+                if (is_ast_node_block_expr(last_nonterminal)) {
+                    cleanup_stack(last_yielded);
+                    return last_yielded;
+                } else {
+                    cleanup_stack(YieldsValue::No);
+                    return YieldsValue::No;
+                }
+            }
+        };
+
+        auto expect_yield = [&](YieldsValue yields) {
+            if (yields == YieldsValue::No) {
+                raise_error("expected node to yield value");
+            }
+        };
+
+        return visit<YieldsValue>(overload_set {
+            [&](const AstVarDecl& node) -> YieldsValue {
+                if (!is_root && node.target->type == AstNodeType::NamedReference) {
+                    // Local variable declaration
+
+                    if (node.init) {
+                        expect_yield(generate_node(node.init));
+                    } else {
+                        emit(Opcode::LoadNil, 1);
+                    }
+
+                    locals.push_back({
+                        .name = static_cast<AstNamedReference*>(node.target)->token,
+                        .index = stack_depth - 1,
+                    });
+                } else {
+                    expect_yield(generate_node(node.target));
+                    if (node.init) expect_yield(generate_node(node.init));
+                    emit(Opcode::NamespaceVarDecl, (node.init) ? -2 : -1).decl_has_init = bool(node.init);
+                }
+
+                // Variable declarations never yield a value
+                return YieldsValue::No;
             },
-            // [&](const AstBlock& node) {
-            // },
+            [&](const AstBlock& node) -> YieldsValue {
+                return generate_block_body(node);
+            },
             // [&](const AstFunction& node) {
             // },
-            [&](const AstCall& node) {
-                generate_node(node.callee);
+            [&](const AstCall& node) -> YieldsValue {
+                expect_yield(generate_node(node.callee));
                 usz num_args = 0;
                 for (auto arg = node.arguments.head; arg; arg = arg->next) {
-                    generate_node(arg);
+                    expect_yield(generate_node(arg));
                     num_args++;
                 }
 
                 if (node.token.raw == lang_str("(")) {
-                    emit(Opcode::CallFunction).arg_count = num_args;
+                    emit(Opcode::CallFunction, 1 - num_args).arg_count = num_args;
                 } else if (node.token.raw == lang_str("[")) {
-                    emit(Opcode::CallSubscript).arg_count = num_args;
+                    emit(Opcode::CallSubscript, 1 - num_args).arg_count = num_args;
                 } else {
-                    log_error("unknown call type: {}", node.token.raw);
+                    raise_error("unknown call type: {}", node.token.raw);
                 }
+
+                // Functions always return some value (possibly unit)
+                return YieldsValue::Yes;
             },
             // [&](const AstCallNamedArgument& node) {
             // },
-            [&](const AstLiteral& node) {
+            [&](const AstLiteral& node) -> YieldsValue {
                 switch (node.token.type) {
                     case TokenType::Number:
-                        emit(Opcode::LoadNumber).token = node.token;
+                        emit(Opcode::LoadNumber, 1).token = node.token;
                         break;
                     case TokenType::String:
-                        emit(Opcode::LoadString).token = node.token;
+                        emit(Opcode::LoadString, 1).token = node.token;
                         break;
                     default:
-                        log_error("unknown token type for literal");
+                        raise_error("unknown token type for literal");
                 }
+                return YieldsValue::Yes;
             },
-            [&](const AstNamedReference& node) {
-                emit(Opcode::LoadNamedReference).token = node.token;
+            [&](const AstNamedReference& node) -> YieldsValue {
+                auto i_local = std::ranges::find_if(locals, [&](auto& l) {
+                    return l.name.raw == node.token.raw;
+                });
+                if (i_local != locals.end()) {
+                    emit(Opcode::LoadLocal, 1).stack_index = i_local->index;
+                } else {
+                    emit(Opcode::LoadGlobal, 1).token = node.token;
+                }
+                return YieldsValue::Yes;
             },
-            [&](const AstOpExpr& node) {
-                if (node.lhs) generate_node(node.lhs);
-                if (node.rhs) generate_node(node.rhs);
-                emit(Opcode::Operator).op = node.op;
+            [&](const AstOpExpr& node) -> YieldsValue {
+                if (node.lhs) expect_yield(generate_node(node.lhs));
+                if (node.rhs) expect_yield(generate_node(node.rhs));
+                emit(Opcode::Operator, 1 - bool(node.lhs) - bool(node.rhs)).op = node.op;
+
+                // TODO: Handle operators that don't evaluate to anything in future?
+                return YieldsValue::Yes;
             },
-            [&](const AstFieldAccess& node) {
-                generate_node(node.lhs);
-                emit(Opcode::FieldAccess).token = node.field;
+            [&](const AstFieldAccess& node) -> YieldsValue {
+                expect_yield(generate_node(node.lhs));
+                emit(Opcode::FieldAccess, 0).token = node.field;
+                return YieldsValue::Yes;
             },
             // [&](const AstIf& node) {
             // },
@@ -71,13 +178,13 @@ BytecodeChunk* bytecode_generate(AstNode* node)
             // },
             // [&](const AstDefer& node) {
             // },
-            [&](const auto& node) {
-                log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));
+            [&](const auto& node) -> YieldsValue {
+                raise_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));
             },
         }, _node);
     };
 
-    generate_root(node);
+    generate_root(node, true);
 
     return chunk;
 }
@@ -92,14 +199,20 @@ void bytecode_debug_print(BytecodeChunk* chunk)
 
     for (auto& instruction : chunk->bytecode) {
         switch (instruction.opcode) {
+            case Opcode::LoadNil:
+                print_instr("LOAD_NIL", "");
+                break;
             case Opcode::LoadNumber:
                 print_instr("LOAD_NUMBER", "{}", instruction.token.raw);
                 break;
             case Opcode::LoadString:
                 print_instr("LOAD_STRING", "{}", instruction.token.string.value);
                 break;
-            case Opcode::LoadNamedReference:
-                print_instr("LOAD_NAMED", "{}", instruction.token.raw);
+            case Opcode::LoadGlobal:
+                print_instr("LOAD_GLOBAL", "{}", instruction.token.raw);
+                break;
+            case Opcode::LoadLocal:
+                print_instr("LOAD_LOCAL", "{}", instruction.stack_index);
                 break;
             case Opcode::CallFunction:
                 print_instr("CALL_FUNCTION", "{}", instruction.arg_count);
@@ -110,11 +223,17 @@ void bytecode_debug_print(BytecodeChunk* chunk)
             case Opcode::FieldAccess:
                 print_instr("FIELD_ACCESS", "{}", instruction.token.raw);
                 break;
-            case Opcode::VarDecl:
+            case Opcode::NamespaceVarDecl:
                 print_instr("VAR_DECL", "has_init = {}", instruction.decl_has_init);
                 break;
             case Opcode::Operator:
                 print_instr("OPERATOR", "{}", get_op_name(instruction.op));
+                break;
+            case Opcode::Pop:
+                print_instr("POP", "{}", instruction.count);
+                break;
+            case Opcode::PushDown:
+                print_instr("PUSH_DOWN", "{}", instruction.count);
                 break;
             default:
                 raise_error("unknown opcode: {}", get_opcode_name(instruction.opcode));

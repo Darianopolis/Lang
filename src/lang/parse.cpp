@@ -58,8 +58,8 @@ auto OperatorOrdering = []{
     using enum Operator;
 
     auto order = [&](std::span<const std::initializer_list<Operator>> op_groups) {
-        for (int i = 0; i < op_groups.size(); ++i) {
-            for (int j = i + 1; j < op_groups.size(); ++j) {
+        for (u32 i = 0; i < op_groups.size(); ++i) {
+            for (u32 j = i + 1; j < op_groups.size(); ++j) {
                 auto l = op_groups.begin()[i];
                 auto r = op_groups.begin()[j];
                 bind(Left, l, r);

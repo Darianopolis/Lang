@@ -17,11 +17,11 @@ void CompileJobSystem::add_fragment(AstNode* n, FileContext* file_context)
     unblocked.emplace_back(context);
 }
 
-void CompileJobSystem::try_unblock(CollectionAccess* access)
+void CompileJobSystem::try_unblock(NamespaceAccess* access)
 {
-    std::erase_if(blocked, [&](const std::pair<ExecutionContext*, CollectionAccess*>& pair) -> bool {
+    std::erase_if(blocked, [&](const std::pair<ExecutionContext*, NamespaceAccess*>& pair) -> bool {
         auto[ctx, blocked_access] = pair;
-        if (blocked_access->collection == access->collection
+        if (blocked_access->_namespace == access->_namespace
                 && blocked_access->field.raw == access->field.raw) {
 
             unblocked.emplace_back(ctx);
@@ -42,10 +42,10 @@ void CompileJobSystem::compile()
 
         auto res = execution_context_run(context);
         if (res.code == ExecutionResultCode::Blocked) {
-            if (!res.value || res.value->type != ValueType::CollectionAccess) {
-                raise_error("expected CollectionAcces as value when execution blocked");
+            if (!res.value || res.value->type != ValueType::NamespaceAccess) {
+                raise_error("expected NamespaceAccess as value when execution blocked");
             }
-            blocked.emplace_back(context, static_cast<CollectionAccess*>(res.value));
+            blocked.emplace_back(context, static_cast<NamespaceAccess*>(res.value));
             log_debug("  blocked!");
         } else {
             completed.emplace_back(context, res);

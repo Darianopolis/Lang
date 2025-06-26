@@ -404,7 +404,7 @@ struct ScanState
                 case '\'':                read_rawstring();   break;
                 default: {
                     if (is_valid_identifier_start_element(c)) read_identifier();
-                    else raise_error("illegal source character: {} - ({})", int(c), char(c));
+                    else raise_error("illegal source character: {} - ({})", u32(c), char(c));
                     break;
                 }
             }

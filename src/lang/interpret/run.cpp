@@ -6,7 +6,7 @@ NAMESPACE_BEGIN(lang)
 FileContext* file_context_create()
 {
     return new FileContext {
-        .global = tag_value(new Collection()),
+        .global = tag_value(new Namespace()),
     };
 }
 
@@ -28,10 +28,10 @@ struct LoadResult
 static Value* load_value(Value* value, LoadResult& load_res)
 {
     switch (value->type) {
-        case ValueType::CollectionAccess: {
-            auto collection_access = static_cast<CollectionAccess*>(value);
-            log_trace("attempting to access field [{}] in collection [{}]", collection_access->field.raw, (void*)collection_access->collection);
-            auto loaded = collection_access->collection->get(collection_access->field.raw);
+        case ValueType::NamespaceAccess: {
+            auto namespace_access = static_cast<NamespaceAccess*>(value);
+            log_trace("attempting to access field [{}] in namespace [{}]", namespace_access->field.raw, (void*)namespace_access->_namespace);
+            auto loaded = namespace_access->_namespace->get(namespace_access->field.raw);
             if (loaded) {
                 log_trace("  found");
                 load_res = { false };
@@ -110,12 +110,22 @@ ExecutionResult execution_context_run(ExecutionContext* context)
     }
 
     for (; ip < bc_size; ip++) {
-        log_trace(">> ip = {} stack.size = {}", ip, stack.size());
+
+        std::string stack_contents{};
+        for (auto& v : stack) {
+            stack_contents += " ";
+            stack_contents += value_to_string(v);
+        }
+        log_trace(">> ip = {} stack.size = {} stack = [{} ]", ip, stack.size(), stack_contents);
 
         auto& instr = bytecode[ip];
         switch (instr.opcode) {
+            case Opcode::LoadNil: {
+                stack.emplace_back(nullptr);
+                break;
+            }
             case Opcode::LoadNumber: {
-                double value;
+                f64 value;
                 auto raw = instr.token.number.raw;
                 auto res = std::from_chars(raw.begin(), raw.end(), value);
                 if (!res) {
@@ -124,12 +134,16 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 stack.emplace_back(tag_value(new Number{ .value = value }));
                 break;
             }
-            case Opcode::LoadNamedReference: {
+            case Opcode::LoadGlobal: {
                 // TODO: Handle locals
-                push(tag_value(new CollectionAccess{
-                    .collection = context->file->global,
+                push(tag_value(new NamespaceAccess{
+                    ._namespace = context->file->global,
                     .field = instr.token,
                 }));
+                break;
+            }
+            case Opcode::LoadLocal: {
+                push(stack.at(instr.stack_index));
                 break;
             }
             case Opcode::FieldAccess: {
@@ -139,10 +153,10 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 }
 
                 switch (lhs->type) {
-                    case ValueType::Collection: {
-                        auto collection = static_cast<Collection*>(lhs);
-                        push(tag_value(new CollectionAccess {
-                            .collection = collection,
+                    case ValueType::Namespace: {
+                        auto _namespace = static_cast<Namespace*>(lhs);
+                        push(tag_value(new NamespaceAccess {
+                            ._namespace = _namespace,
                             .field = instr.token,
                         }));
                         break;
@@ -152,7 +166,7 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 }
                 break;
             }
-            case Opcode::VarDecl: {
+            case Opcode::NamespaceVarDecl: {
                 Value* init = nullptr;
                 if (instr.decl_has_init) {
                     if (auto res = try_pop_and_load_values(context, &init, 1); res.blocked) {
@@ -165,11 +179,11 @@ ExecutionResult execution_context_run(ExecutionContext* context)
 
                 auto target = pop();
 
-                if (target->type != ValueType::CollectionAccess) raise_error("target of a variable declaration must be a collection access");
-                auto access = static_cast<CollectionAccess*>(target);
-                if (access->collection->has(access->field.raw)) raise_error("target of variable declaration must not already exist");
+                if (target->type != ValueType::NamespaceAccess) raise_error("target of a variable declaration must be a namespace access");
+                auto access = static_cast<NamespaceAccess*>(target);
+                if (access->_namespace->has(access->field.raw)) raise_error("target of variable declaration must not already exist");
 
-                access->collection->set(access->field.raw, init);
+                access->_namespace->set(access->field.raw, init);
                 context->job_system->try_unblock(access);
 
                 break;
@@ -184,6 +198,20 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                     default:
                         raise_error("unsupported operator: {}", get_op_name(instr.op));
                 }
+                break;
+            }
+            case Opcode::Pop: {
+                for (u32 i = 0; i < instr.count; ++i) {
+                    pop();
+                }
+                break;
+            }
+            case Opcode::PushDown: {
+                auto v = pop();
+                for (u32 i = 0; i < instr.count; ++i) {
+                    pop();
+                }
+                push(v);
                 break;
             }
             default:
