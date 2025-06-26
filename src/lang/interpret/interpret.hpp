@@ -16,6 +16,7 @@ NAMESPACE_BEGIN(lang)
     DO(CallSubscript) \
     \
     DO(FieldAccess) \
+    DO(VarDecl) \
     \
     DO(Operator)
 
@@ -43,6 +44,7 @@ struct Instruction
         Token token = {};
         Operator op;
         u32 arg_count;
+        bool decl_has_init;
     };
 };
 
@@ -144,6 +146,8 @@ std::string value_to_string(Value* value)
 
 // -----------------------------------------------------------------------------
 
+struct CompileJobSystem;
+
 struct FileContext
 {
     Collection* global;
@@ -151,6 +155,7 @@ struct FileContext
 
 struct ExecutionContext
 {
+    CompileJobSystem* job_system;
     FileContext* file;
     BytecodeChunk* chunk;
     std::vector<Value*> stack;
@@ -175,5 +180,18 @@ struct ExecutionResult
 FileContext* file_context_create();
 ExecutionContext* execution_context_create(FileContext* file, BytecodeChunk* chunk);
 ExecutionResult execution_context_run(ExecutionContext* context);
+
+// -----------------------------------------------------------------------------
+
+struct CompileJobSystem
+{
+    std::vector<std::pair<ExecutionContext*, CollectionAccess*>> blocked;
+    std::vector<ExecutionContext*> unblocked;
+    std::vector<std::pair<ExecutionContext*, ExecutionResult>> completed;
+
+    void try_unblock(CollectionAccess* access);
+    void add_file_node_list(AstNodeList nodes, FileContext* file_context);
+    void compile();
+};
 
 NAMESPACE_END

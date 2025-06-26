@@ -19,11 +19,10 @@ ExecutionContext* execution_context_create(FileContext* file, BytecodeChunk* chu
     };
 }
 
-enum class LoadResult
+struct LoadResult
 {
-    Success,
-    Failure,
-    Block,
+    bool blocked = false;
+    Value* blocking_access = nullptr;
 };
 
 static Value* load_value(Value* value, LoadResult& load_res)
@@ -35,18 +34,42 @@ static Value* load_value(Value* value, LoadResult& load_res)
             auto loaded = collection_access->collection->get(collection_access->field.raw);
             if (loaded) {
                 log_trace("  found");
-                load_res = LoadResult::Success;
+                load_res = { false };
                 return loaded;
             } else {
                 log_trace("  not found");
-                load_res = LoadResult::Block;
+                load_res = { true, value };
                 return nullptr;
             }
         }
         default:
-            load_res = LoadResult::Success;
+            load_res = { false };
             return value;
     }
+}
+
+LoadResult try_pop_and_load_values(ExecutionContext* context, Value** out_values, u32 num_values)
+{
+    for (u32 i = 0; i < num_values; ++i) {
+        auto preload = context->stack.back();
+        context->stack.pop_back();
+
+        LoadResult res;
+        auto loaded = load_value(preload, res);
+        if (res.blocked) {
+            context->stack.push_back(res.blocking_access);
+            if (i > 0) {
+                for (u32 j = i; j--;) {
+                    context->stack.push_back(out_values[j]);
+                }
+            }
+            return { true, preload };
+        }
+
+        out_values[i] = loaded;
+    }
+
+    return { false };
 }
 
 ExecutionResult execution_context_run(ExecutionContext* context)
@@ -67,22 +90,19 @@ ExecutionResult execution_context_run(ExecutionContext* context)
         stack.push_back(v);
     };
 
-    LoadResult load_res;
-#define LOAD_VALUE(val) load_value((val), load_res); \
-    if (load_res == LoadResult::Block) return ExecutionResult { .code = ExecutionResultCode::Blocked }
-
 #define EXPECT_NUMBER(val) static_cast<Number*>(val); if (val->type != ValueType::Number) { \
-    log_error("expected number, got: {}", get_value_type_name(val->type)); \
-    return ExecutionResult { .code = ExecutionResultCode::Error }; \
+    raise_error("expected number, got: {}", get_value_type_name(val->type)); \
 }
 
 #define BINARY_NUMBER_OP(op_sym, op_name) \
     case Operator::op_name: { \
-        auto rhs = LOAD_VALUE(pop()); \
-        auto lhs = LOAD_VALUE(pop()); \
+        Value* values[2]; \
+        auto res = try_pop_and_load_values(context, values, 2); \
+        if (res.blocked) return { .code = ExecutionResultCode::Blocked, .value = res.blocking_access }; \
         \
-        auto lhs_num = EXPECT_NUMBER(lhs); \
-        auto rhs_num = EXPECT_NUMBER(rhs); \
+        auto lhs_num = EXPECT_NUMBER(values[1]); \
+        auto rhs_num = EXPECT_NUMBER(values[0]); \
+        log_trace("{} {} {} = {}", lhs_num->value, #op_sym, rhs_num->value, lhs_num->value op_sym rhs_num->value); \
         \
         push(tag_value(new Number{ .value = lhs_num->value op_sym rhs_num->value })); \
         \
@@ -90,6 +110,8 @@ ExecutionResult execution_context_run(ExecutionContext* context)
     }
 
     for (; ip < bc_size; ip++) {
+        log_trace(">> ip = {} stack.size = {}", ip, stack.size());
+
         auto& instr = bytecode[ip];
         switch (instr.opcode) {
             case Opcode::LoadNumber: {
@@ -97,13 +119,13 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 auto raw = instr.token.number.raw;
                 auto res = std::from_chars(raw.begin(), raw.end(), value);
                 if (!res) {
-                    log_error("error parsing number from token: {}", std::make_error_code(res.ec).message());
-                    return ExecutionResult { .code = ExecutionResultCode::Error };
+                    raise_error("error parsing number from token: {}", std::make_error_code(res.ec).message());
                 }
                 stack.emplace_back(tag_value(new Number{ .value = value }));
                 break;
             }
             case Opcode::LoadNamedReference: {
+                // TODO: Handle locals
                 push(tag_value(new CollectionAccess{
                     .collection = context->file->global,
                     .field = instr.token,
@@ -111,7 +133,11 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 break;
             }
             case Opcode::FieldAccess: {
-                auto lhs = LOAD_VALUE(pop());
+                Value* lhs;
+                if (auto res = try_pop_and_load_values(context, &lhs, 1); res.blocked) {
+                    return { ExecutionResultCode::Blocked, res.blocking_access };
+                }
+
                 switch (lhs->type) {
                     case ValueType::Collection: {
                         auto collection = static_cast<Collection*>(lhs);
@@ -124,6 +150,28 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                     default:
                         raise_error("invalid lhs for field access");
                 }
+                break;
+            }
+            case Opcode::VarDecl: {
+                Value* init = nullptr;
+                if (instr.decl_has_init) {
+                    if (auto res = try_pop_and_load_values(context, &init, 1); res.blocked) {
+                        return { ExecutionResultCode::Blocked, res.blocking_access };
+                    }
+                }
+
+                // TODO: Temp
+                if (!instr.decl_has_init) raise_error("var decl must have init (for now)");
+
+                auto target = pop();
+
+                if (target->type != ValueType::CollectionAccess) raise_error("target of a variable declaration must be a collection access");
+                auto access = static_cast<CollectionAccess*>(target);
+                if (access->collection->has(access->field.raw)) raise_error("target of variable declaration must not already exist");
+
+                access->collection->set(access->field.raw, init);
+                context->job_system->try_unblock(access);
+
                 break;
             }
             case Opcode::Operator: {

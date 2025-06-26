@@ -12,8 +12,11 @@ BytecodeChunk* bytecode_generate(AstNode* node)
         };
 
         visit(overload_set {
-            // [&](const AstVarDecl& node) {
-            // },
+            [&](const AstVarDecl& node) {
+                generate_node(node.target);
+                if (node.init) generate_node(node.init);
+                emit(Opcode::VarDecl).decl_has_init = bool(node.init);
+            },
             // [&](const AstBlock& node) {
             // },
             // [&](const AstFunction& node) {
@@ -106,6 +109,9 @@ void bytecode_debug_print(BytecodeChunk* chunk)
                 break;
             case Opcode::FieldAccess:
                 print_instr("FIELD_ACCESS", "{}", instruction.token.raw);
+                break;
+            case Opcode::VarDecl:
+                print_instr("VAR_DECL", "has_init = {}", instruction.decl_has_init);
                 break;
             case Opcode::Operator:
                 print_instr("OPERATOR", "{}", get_op_name(instruction.op));

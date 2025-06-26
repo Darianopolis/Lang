@@ -45,7 +45,21 @@ int main()
     // auto message = "main :: () { print(\"Hello, world\") }";
 
     // auto message = "math.pi * 123 + min(456, 2)";
-    auto message = "1.5 * foo + 3 / math.pi - 5";
+    // auto message = "1.5 * foo + 3 / math.pi - 5";
+    auto message = R"(
+
+1.5 * bar + 3 / math.pi - 5;
+
+foo :: 2;
+1.5 * foo + 3 / math.tau - 5;
+
+math.tau :: math.pi * 2;
+
+x :: 2;
+x + y;
+y :: 5;
+
+    )";
 
 #if 0
     auto message = R"(
@@ -57,7 +71,7 @@ foo : i32;
 bar :: foo = 42;
 
 mylib.pi : f64 : 3.1415;
-mylib.tau :: mlib.pi * 2;
+mylib.tau :: mylib.pi * 2;
 
 mylib.fib : (n) -> @typeof(n) = (n) {
     if n < 2 { n } else { mylib.fib(n - 1) + mylib.fib(n - 2) }
@@ -168,41 +182,29 @@ x :: 123;
     log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
 
     start = std::chrono::steady_clock::now();
-    auto node = parse(tokens);
+    auto node_list = parse(tokens);
     end = std::chrono::steady_clock::now();
 
     log_debug("parsed in {:.4f}", std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count());
 
-    debug_print(node);
+    debug_print(node_list);
 
     log_debug("printed");
 
-    auto* bytecode = bytecode_generate(node.head);
-    bytecode_debug_print(bytecode);
-
-    log_debug("bytecode generated");
-
     auto file_context = file_context_create();
 
-    file_context->global->set("foo", tag_value(new Number{ .value = 2.0 }));
+    file_context->global->set("bar", tag_value(new Number{ .value = 3.0 }));
 
     auto math = tag_value(new Collection{});
     math->set("pi", tag_value(new Number{ . value = std::numbers::pi }));
     file_context->global->set("math", math);
 
-    auto exec_ctx = execution_context_create(file_context, bytecode);
-    auto result = execution_context_run(exec_ctx);
-    switch (result.code) {
-        case lang::ExecutionResultCode::Success:
-            log_info("success, result = {}", value_to_string(result.value));
-            break;
-        case lang::ExecutionResultCode::Blocked:
-            log_info("execution was blocked");
-            break;
-        case lang::ExecutionResultCode::Error:
-            log_info("runtime error!");
-            break;
-    }
+    CompileJobSystem job_system;
+    job_system.add_file_node_list(node_list, file_context);
+
+    log_debug("bytecode generated");
+
+    job_system.compile();
 
     log_debug("bytecode interpreted");
 }
