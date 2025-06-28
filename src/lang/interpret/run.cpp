@@ -30,14 +30,15 @@ static Value* load_value(Value* value, LoadResult& load_res)
     switch (value->type) {
         case ValueType::NamespaceAccess: {
             auto namespace_access = static_cast<NamespaceAccess*>(value);
-            log_trace("attempting to access field [{}] in namespace [{}]", namespace_access->field.raw, (void*)namespace_access->_namespace);
+            // log_trace("attempting to access field [{}] in namespace [{}]", namespace_access->field.raw, (void*)namespace_access->_namespace);
             auto loaded = namespace_access->_namespace->get(namespace_access->field.raw);
             if (loaded) {
-                log_trace("  found");
+                // log_trace("  found");
                 load_res = { false };
                 return loaded;
             } else {
-                log_trace("  not found");
+                // log_trace("  not found");
+                log_trace("   waiting on field [{}] in namespace [{}]...", namespace_access->field.raw, (void*)namespace_access->_namespace);
                 load_res = { true, value };
                 return nullptr;
             }
@@ -119,6 +120,7 @@ ExecutionResult execution_context_run(ExecutionContext* context)
         log_trace(">> ip = {} stack.size = {} stack = [{} ]", ip, stack.size(), stack_contents);
 
         auto& instr = bytecode[ip];
+        log_trace("   op = {}", get_opcode_name(instr.opcode));
         switch (instr.opcode) {
             case Opcode::LoadNil: {
                 stack.emplace_back(nullptr);
@@ -127,6 +129,7 @@ ExecutionResult execution_context_run(ExecutionContext* context)
             case Opcode::LoadNumber: {
                 f64 value;
                 auto raw = instr.token.number.raw;
+                log_trace("   value = {}", raw);
                 auto res = std::from_chars(raw.begin(), raw.end(), value);
                 if (!res) {
                     raise_error("error parsing number from token: {}", std::make_error_code(res.ec).message());
@@ -212,6 +215,35 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                     pop();
                 }
                 push(v);
+                break;
+            }
+            case Opcode::JumpIfFalse: {
+                Value* v;
+                if (auto res = try_pop_and_load_values(context, &v, 1); res.blocked) {
+                    return { ExecutionResultCode::Blocked, res.blocking_access };
+                }
+
+                log_trace("   cond = {}", value_to_string(v));
+
+                bool truthy = false;
+                if (v) {
+                    if (v->type == ValueType::Number) {
+                        if (static_cast<Number*>(v)->value) {
+                            truthy = true;
+                        }
+                    }
+                }
+
+                log_trace("   truthy = {}", truthy);
+
+                if (!truthy) {
+                    ip = instr.target_instruction - 1; // -1 because we'll advance to target_instruction on the next loop
+                }
+
+                break;
+            }
+            case Opcode::Jump: {
+                ip = instr.target_instruction - 1; // -1 because we'll advance to target_instruction on the next loop
                 break;
             }
             default:

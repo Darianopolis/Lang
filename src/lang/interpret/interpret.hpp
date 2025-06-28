@@ -23,7 +23,10 @@ NAMESPACE_BEGIN(lang)
     DO(Operator) \
     \
     DO(Pop) \
-    DO(PushDown)
+    DO(PushDown) \
+    \
+    DO(JumpIfFalse) \
+    DO(Jump)
 
 #define OPCODE_DECLARE(op, ...) op,
 
@@ -52,6 +55,7 @@ struct Instruction
         bool decl_has_init;
         u32 count;
         u32 stack_index;
+        u32 target_instruction;
     };
 };
 

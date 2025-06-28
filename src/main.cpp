@@ -48,6 +48,7 @@ int main()
 
     auto message = R"(
 
+#[[[
 foo :: 2;
 1.5 * bar + 3 / math.pi - 5;
 
@@ -68,6 +69,10 @@ z :: 4;
     y :: 3;
     x * { foo :: y; foo + 1 } - z
 }
+]]]
+
+x :: 0;
+if x { 2 } else { 3 }
 
     )";
 

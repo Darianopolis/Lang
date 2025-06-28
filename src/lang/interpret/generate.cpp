@@ -147,10 +147,15 @@ BytecodeChunk* bytecode_generate(AstNode* node)
                 return YieldsValue::Yes;
             },
             [&](const AstNamedReference& node) -> YieldsValue {
-                auto i_local = std::ranges::find_if(locals, [&](auto& l) {
-                    return l.name.raw == node.token.raw;
-                });
-                if (i_local != locals.end()) {
+                Local* i_local{};
+                for (u32 i = locals.size(); i--;) {
+                    // Search from back so that we find later (shadowing) locals first
+                    if (locals[i].name.raw == node.token.raw) {
+                        i_local = &locals[i];
+                        break;
+                    }
+                }
+                if (i_local) {
                     emit(Opcode::LoadLocal, 1).stack_index = i_local->index;
                 } else {
                     emit(Opcode::LoadGlobal, 1).token = node.token;
@@ -170,8 +175,39 @@ BytecodeChunk* bytecode_generate(AstNode* node)
                 emit(Opcode::FieldAccess, 0).token = node.field;
                 return YieldsValue::Yes;
             },
-            // [&](const AstIf& node) {
-            // },
+            [&](const AstIf& node) {
+                expect_yield(generate_node(node.cond));
+
+                auto jump_over_then_index = chunk->bytecode.size();
+                emit(Opcode::JumpIfFalse, -1);
+
+                if (node.then_branch->type != AstNodeType::Block) raise_error("expected block for then_branch");
+                auto then_yields = generate_block_body(*static_cast<AstBlock*>(node.then_branch));
+
+                // Backpatch then jump
+                chunk->bytecode[jump_over_then_index].target_instruction = chunk->bytecode.size();
+
+                auto else_yields = YieldsValue::No;
+                if (node.else_branch) {
+                    auto jump_over_else_index = chunk->bytecode.size();
+                    emit(Opcode::Jump, -1);
+
+                    // Update then jump to jump past unconditional else skip jump
+                    chunk->bytecode[jump_over_then_index].target_instruction++;
+
+                    if (node.then_branch->type != AstNodeType::Block) raise_error("expected block for then_branch");
+                    else_yields = generate_block_body(*static_cast<AstBlock*>(node.else_branch));
+
+                    // Backpatch else jump
+                    chunk->bytecode[jump_over_else_index].target_instruction = chunk->bytecode.size();
+                }
+
+                if (then_yields != else_yields) {
+                    raise_error("either both or neither branch of an if/else must yield a value");
+                }
+
+                return then_yields;
+            },
             // [&](const AstFor& node) {
             // },
             // [&](const AstWhile& node) {
@@ -234,6 +270,12 @@ void bytecode_debug_print(BytecodeChunk* chunk)
                 break;
             case Opcode::PushDown:
                 print_instr("PUSH_DOWN", "{}", instruction.count);
+                break;
+            case Opcode::JumpIfFalse:
+                print_instr("JUMP_FALSE", "{}", instruction.target_instruction);
+                break;
+            case Opcode::Jump:
+                print_instr("JUMP", "{}", instruction.target_instruction);
                 break;
             default:
                 raise_error("unknown opcode: {}", get_opcode_name(instruction.opcode));
