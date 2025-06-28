@@ -69,10 +69,19 @@ z :: 4;
     y :: 3;
     x * { foo :: y; foo + 1 } - z
 }
-]]]
 
 x :: 0;
 if x { 2 } else { 3 }
+
+]]]
+
+{
+    x := 0;
+    while x < 10 {
+        print(x);
+        x = x + 1;
+    }
+}
 
     )";
 
@@ -206,6 +215,17 @@ x :: 123;
 
     auto math = tag_value(new Namespace{});
     file_context->global->set("math", math);
+
+    file_context->global->set("print", tag_value(new NativeFunction {
+        .function = [](ExecutionContext* ctx, std::span<Value* const> args) -> Value* {
+            std::string message;
+            for (auto& arg : args) {
+                message += value_to_string(arg);
+            }
+            log_warn("{}", message);
+            return nullptr;
+        },
+    }));
 
     CompileJobSystem job_system;
     for (auto fragment = fragments.head; fragment; fragment = fragment->next) {

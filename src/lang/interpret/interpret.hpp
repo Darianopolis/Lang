@@ -72,12 +72,17 @@ void bytecode_debug_print(BytecodeChunk*);
 #define VALUE_TYPE_LIST(DO) \
     DO(Number) \
     DO(Namespace) \
-    DO(NamespaceAccess)
+    DO(NamespaceAccess) \
+    DO(LocalAccess) \
+    DO(NativeFunction) \
+    DO(String)
 
 #define VALUE_TYPE_DECLARE(name, ...) name,
 
 enum class ValueType
 {
+    _invalid,
+
     VALUE_TYPE_LIST(VALUE_TYPE_DECLARE)
 };
 
@@ -87,6 +92,7 @@ std::string_view get_value_type_name(ValueType type)
 #define VALUE_TYPE_SWITCH_RETURN_NAME(name, ...) case ValueType::name: return #name;
 
     switch (type) {
+        case ValueType::_invalid: raise_error("invalid value type");
         VALUE_TYPE_LIST(VALUE_TYPE_SWITCH_RETURN_NAME)
     }
 }
@@ -126,10 +132,29 @@ struct Namespace : Value
     }
 };
 
+struct ExecutionContext;
+
+struct NativeFunction : Value
+{
+    std::function<Value*(ExecutionContext*, std::span<Value* const> args)> function;
+};
+
 struct NamespaceAccess : Value
 {
     Namespace* _namespace;
     Token field;
+};
+
+struct LocalAccess : Value
+{
+    u32 local_index;
+};
+
+struct String : Value
+{
+    // TODO: Temporary, will be represented as array of 8 bit unsigned integers
+
+    std::string value;
 };
 
 template<typename T>
@@ -145,13 +170,27 @@ T* tag_value(T* value)
 inline
 std::string value_to_string(Value* value)
 {
+    if (!value) {
+        return "Nil";
+    }
     switch (value->type) {
         case ValueType::Number: {
             auto num = static_cast<Number*>(value);
             return std::to_string(num->value);
         }
+        case ValueType::String: {
+            return static_cast<String*>(value)->value;
+        }
+        case ValueType::NamespaceAccess: {
+            auto access = static_cast<NamespaceAccess*>(value);
+            return std::format("NamespaceAccess({} in [{}])", access->field.raw, (void*)access->_namespace);
+        }
+        case ValueType::LocalAccess: {
+            auto access = static_cast<LocalAccess*>(value);
+            return std::format("LocalAccess({})", access->local_index);
+        }
         default:
-            return "?";
+            raise_error("value_to_string :: unhandled value type: {}", get_value_type_name(value->type));
     }
 }
 

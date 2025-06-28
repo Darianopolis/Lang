@@ -121,9 +121,9 @@ BytecodeChunk* bytecode_generate(AstNode* node)
                 }
 
                 if (node.token.raw == lang_str("(")) {
-                    emit(Opcode::CallFunction, 1 - num_args).arg_count = num_args;
+                    emit(Opcode::CallFunction, -num_args).arg_count = num_args;
                 } else if (node.token.raw == lang_str("[")) {
-                    emit(Opcode::CallSubscript, 1 - num_args).arg_count = num_args;
+                    emit(Opcode::CallSubscript, -num_args).arg_count = num_args;
                 } else {
                     raise_error("unknown call type: {}", node.token.raw);
                 }
@@ -190,7 +190,7 @@ BytecodeChunk* bytecode_generate(AstNode* node)
                 auto else_yields = YieldsValue::No;
                 if (node.else_branch) {
                     auto jump_over_else_index = chunk->bytecode.size();
-                    emit(Opcode::Jump, -1);
+                    emit(Opcode::Jump, 0);
 
                     // Update then jump to jump past unconditional else skip jump
                     chunk->bytecode[jump_over_then_index].target_instruction++;
@@ -210,8 +210,29 @@ BytecodeChunk* bytecode_generate(AstNode* node)
             },
             // [&](const AstFor& node) {
             // },
-            // [&](const AstWhile& node) {
-            // },
+            [&](const AstWhile& node) {
+
+                auto loop_start_ip = chunk->bytecode.size();
+
+                expect_yield(generate_node(node.cond));
+
+                auto jump_out_index = chunk->bytecode.size();
+                emit(Opcode::JumpIfFalse, -1);
+
+                if (node.body->type != AstNodeType::Block) raise_error("expected block for while body");
+                auto body_yields = generate_block_body(*static_cast<AstBlock*>(node.body));
+                if (body_yields == YieldsValue::Yes) {
+                    raise_error("loop body cannot directly yield value, use break expression");
+                }
+
+                emit(Opcode::Jump, 0).target_instruction = loop_start_ip;
+
+                // Backpatch out jump
+                chunk->bytecode[jump_out_index].target_instruction = chunk->bytecode.size();
+
+                // TODO: support break + else
+                return YieldsValue::No;
+            },
             // [&](const AstDefer& node) {
             // },
             [&](const auto& node) -> YieldsValue {

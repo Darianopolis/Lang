@@ -25,7 +25,7 @@ struct LoadResult
     Value* blocking_access = nullptr;
 };
 
-static Value* load_value(Value* value, LoadResult& load_res)
+static Value* load_value(ExecutionContext* context, Value* value, LoadResult& load_res)
 {
     switch (value->type) {
         case ValueType::NamespaceAccess: {
@@ -43,6 +43,10 @@ static Value* load_value(Value* value, LoadResult& load_res)
                 return nullptr;
             }
         }
+        case ValueType::LocalAccess: {
+            auto local_access = static_cast<LocalAccess*>(value);
+            return context->stack[local_access->local_index];
+        }
         default:
             load_res = { false };
             return value;
@@ -56,18 +60,18 @@ LoadResult try_pop_and_load_values(ExecutionContext* context, Value** out_values
         context->stack.pop_back();
 
         LoadResult res;
-        auto loaded = load_value(preload, res);
+        auto loaded = load_value(context, preload, res);
         if (res.blocked) {
             context->stack.push_back(res.blocking_access);
             if (i > 0) {
                 for (u32 j = i; j--;) {
-                    context->stack.push_back(out_values[j]);
+                    context->stack.push_back(out_values[num_values - 1 - j]);
                 }
             }
             return { true, preload };
         }
 
-        out_values[i] = loaded;
+        out_values[num_values - 1 - i] = loaded;
     }
 
     return { false };
@@ -101,11 +105,11 @@ ExecutionResult execution_context_run(ExecutionContext* context)
         auto res = try_pop_and_load_values(context, values, 2); \
         if (res.blocked) return { .code = ExecutionResultCode::Blocked, .value = res.blocking_access }; \
         \
-        auto lhs_num = EXPECT_NUMBER(values[1]); \
-        auto rhs_num = EXPECT_NUMBER(values[0]); \
+        auto lhs_num = EXPECT_NUMBER(values[0]); \
+        auto rhs_num = EXPECT_NUMBER(values[1]); \
         log_trace("{} {} {} = {}", lhs_num->value, #op_sym, rhs_num->value, lhs_num->value op_sym rhs_num->value); \
         \
-        push(tag_value(new Number{ .value = lhs_num->value op_sym rhs_num->value })); \
+        push(tag_value(new Number{ .value = double(lhs_num->value op_sym rhs_num->value) })); \
         \
         break; \
     }
@@ -137,6 +141,10 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 stack.emplace_back(tag_value(new Number{ .value = value }));
                 break;
             }
+            case Opcode::LoadString: {
+                stack.emplace_back(tag_value(new String{ .value = std::string(instr.token.string.value) }));
+                break;
+            }
             case Opcode::LoadGlobal: {
                 // TODO: Handle locals
                 push(tag_value(new NamespaceAccess{
@@ -146,7 +154,8 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 break;
             }
             case Opcode::LoadLocal: {
-                push(stack.at(instr.stack_index));
+                push(tag_value(new LocalAccess{ .local_index = instr.stack_index }));
+                // push(stack.at(instr.stack_index));
                 break;
             }
             case Opcode::FieldAccess: {
@@ -193,10 +202,38 @@ ExecutionResult execution_context_run(ExecutionContext* context)
             }
             case Opcode::Operator: {
                 switch (instr.op) {
+                    case Operator::Assign: {
+
+                        Value* rhs;
+                        if (auto res = try_pop_and_load_values(context, &rhs, 1); res.blocked) {
+                            return { ExecutionResultCode::Blocked, res.blocking_access };
+                        }
+
+                        Value* lhs = stack.back();
+
+                        if (lhs->type != ValueType::LocalAccess) {
+                            raise_error("assign only accepts LocalAccess for lhs currently, got: {}", get_value_type_name(lhs->type));
+                        }
+
+                        switch (lhs->type) {
+                            case ValueType::LocalAccess: {
+                                auto access = static_cast<LocalAccess*>(lhs);
+                                stack[access->local_index] = rhs;
+                                break;
+                            }
+                            default:
+                                raise_error("invalid lhs for assign, got: {}", get_value_type_name(lhs->type));
+                        }
+
+                        break;
+                    }
                     BINARY_NUMBER_OP(+, Add)
                     BINARY_NUMBER_OP(-, Subtract)
                     BINARY_NUMBER_OP(*, Multiply)
                     BINARY_NUMBER_OP(/, Divide)
+
+                    // TODO: Handle proper types for comparisons
+                    BINARY_NUMBER_OP(<, Less)
 
                     default:
                         raise_error("unsupported operator: {}", get_op_name(instr.op));
@@ -204,12 +241,14 @@ ExecutionResult execution_context_run(ExecutionContext* context)
                 break;
             }
             case Opcode::Pop: {
+                log_trace("   count = {}", instr.count);
                 for (u32 i = 0; i < instr.count; ++i) {
                     pop();
                 }
                 break;
             }
             case Opcode::PushDown: {
+                log_trace("   count = {}", instr.count);
                 auto v = pop();
                 for (u32 i = 0; i < instr.count; ++i) {
                     pop();
@@ -244,6 +283,24 @@ ExecutionResult execution_context_run(ExecutionContext* context)
             }
             case Opcode::Jump: {
                 ip = instr.target_instruction - 1; // -1 because we'll advance to target_instruction on the next loop
+                break;
+            }
+            case Opcode::CallFunction: {
+
+                std::vector<Value*> values;
+                values.resize(instr.arg_count + 1);
+                if (auto res = try_pop_and_load_values(context, values.data(), instr.arg_count + 1); res.blocked) {
+                    return { ExecutionResultCode::Blocked, res.blocking_access };
+                }
+
+                Value* callee = values.front();
+                if (callee->type != ValueType::NativeFunction) {
+                    raise_error("only native function calls supported currently, got {}", get_value_type_name(callee->type));
+                }
+
+                auto result = static_cast<NativeFunction*>(callee)->function(context, std::span(values.data() + 1, instr.arg_count));
+                push(result);
+
                 break;
             }
             default:
