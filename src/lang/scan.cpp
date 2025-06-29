@@ -65,8 +65,7 @@ bool is_valid_identifier_start_element(u8 c)
 
     return c >= 128
         || is_ascii_alpha(c)
-        || c == '_'
-        || c == '$';
+        || c == '_';
 }
 
 bool is_valid_identifier_continue_element(u8 c)

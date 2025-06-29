@@ -12,10 +12,11 @@ NAMESPACE_BEGIN(lang)
 constexpr std::array Keywords
 {
     "if", "else",
-    "for", "while",
+    "for", "while", "match",
     "break", "continue",
     "return", "defer",
     "true", "false",
+    "struct", "enum",
 };
 
 constexpr std::array PunctuationSequences
@@ -23,7 +24,7 @@ constexpr std::array PunctuationSequences
     "^",    // dereference
 
     "+",    // arithmetic identity / add
-    "+=",   // assing add
+    "+=",   // add assign
     "++",   // pre/post increment
     "-",    // arithmetic negation / subtract
     "-=",   // subtract assign
@@ -34,7 +35,7 @@ constexpr std::array PunctuationSequences
     "**",   // power
     "**=",  // power assign
     "/",    // divide
-    "/=",   // divide assing
+    "/=",   // divide assign
     "%",    // modulo
     "%=",   // moduloe assign
     "<",    // less than
@@ -106,57 +107,57 @@ struct RuntimeLangString
 
 // -----------------------------------------------------------------------------
 
-#define LANG_OPS_Postfix \
+#define OPS_Postfix \
     X(Call) X(Subscript) X(FieldAccess) X(Postincrement) X(Postdecrement) X(Dereference)
 
-#define LANG_OPS_Prefix \
+#define OPS_Prefix \
     X(Preincrement) X(Predecrement) X(Arithmetic_Identity) \
     X(Arithmetic_Negate) X(Bitwise_Negate) X(Logical_Negate) X(AddressOf)
 
-#define LANG_OPS_Arithmetic \
+#define OPS_Arithmetic \
     X(Add) X(Subtract) X(Multiply) X(Divide) X(Modulo) X(Power)
 
-#define LANG_OPS_Bitwise \
+#define OPS_Bitwise \
     X(ShiftLeft) X(ShiftRight) X(Xor) X(Bitwise_And) X(Bitwise_Or)
 
-#define LANG_OPS_Logical \
+#define OPS_Logical \
     X(Logical_And) X(Logical_Or)
 
-#define LANG_OPS_Comparison \
+#define OPS_Comparison \
     X(Equal) X(NotEqual) X(Greater) X(GreaterEqual) X(Less) X(LessEqual)
 
-#define LANG_OPS_Range \
+#define OPS_Range \
     X(Range_Exclusive) X(Range_Inclusive)
 
-#define LANG_OPS_VarDecl \
+#define OPS_VarDecl \
     X(VarDecl)
 
-#define LANG_OPS_Assign \
+#define OPS_Assign \
     X(Assign) \
     X(Assign_Add) X(Assign_Subtract) X(Assign_Multiply) X(Assign_Divide) X(Assign_Modulo) X(Assign_Exponentiate) \
     X(Assign_ShiftLeft) X(Assign_ShiftRight) X(Assign_Xor) X(Assign_Bitwise_And) X(Assign_Bitwise_Or)
 
-#define LANG_OPS_ControlFlow \
+#define OPS_ControlFlow \
     X(Break) X(Return)
 
-#define LANG_OPS_All \
-    LANG_OPS_Postfix \
-    LANG_OPS_Prefix \
-    LANG_OPS_Arithmetic \
-    LANG_OPS_Bitwise \
-    LANG_OPS_Logical \
-    LANG_OPS_Comparison \
-    LANG_OPS_Range \
-    LANG_OPS_VarDecl \
-    LANG_OPS_Assign \
-    LANG_OPS_ControlFlow
+#define OPS_All \
+    OPS_Postfix \
+    OPS_Prefix \
+    OPS_Arithmetic \
+    OPS_Bitwise \
+    OPS_Logical \
+    OPS_Comparison \
+    OPS_Range \
+    OPS_VarDecl \
+    OPS_Assign \
+    OPS_ControlFlow
 
 enum class Operator : u16
 {
     None,
 
 #define X(i) i,
-    LANG_OPS_All
+    OPS_All
 #undef X
 };
 
@@ -167,7 +168,7 @@ std::string_view get_op_name(Operator op)
         case Operator::None: return "None";
 
 #define X(o) case Operator::o: return #o;
-        LANG_OPS_All
+        OPS_All
 #undef X
     }
 }
@@ -178,7 +179,7 @@ constexpr OperatorString make_opstr(const char* op, u32 len)
 {
     u32 hash {};
     for (u32 i = 0; i < len; ++i) {
-        hash |= op[i] << (i * 8);
+        hash |= u32(op[i]) << (i * 8);
     }
 
     return OperatorString(hash);
@@ -298,17 +299,34 @@ constexpr bool is_op_postfix(Operator op)
 
 // -----------------------------------------------------------------------------
 
+#define TOKEN_TYPE_LIST(DO) \
+    DO(Eof, = 1) \
+    \
+    DO(Keyword) \
+    \
+    DO(Identifier) \
+    DO(String) \
+    DO(Number) \
+    DO(Punctuation)
+
+#define TOKEN_TYPE_DECLARE(type, ...) type __VA_ARGS__,
+
 enum class TokenType {
     Invalid = 0,
 
-    Eof = 1,
-
-    Keyword,     // if else
-    Identifier,  // foo
-    String,      // "foo"
-    Number,      // 123.4
-    Punctuation, // +=/*...
+    TOKEN_TYPE_LIST(TOKEN_TYPE_DECLARE)
 };
+
+constexpr std::string_view get_token_type_name(TokenType type)
+{
+    switch (type)
+    {
+#define TOKEN_TYPE_TO_STRING_SWITCH(type, ...) case TokenType::type: return #type;
+        TOKEN_TYPE_LIST(TOKEN_TYPE_TO_STRING_SWITCH)
+        default:
+            raise_error("invalid token type");
+    }
+}
 
 constexpr auto InvalidTokenIndex = ~0u;
 
@@ -486,6 +504,11 @@ TokenList scan(std::string_view);
     X(CallNamedArgument) \
     X(Literal) \
     X(FieldAccess) \
+    X(Enum) \
+    X(EnumValue) \
+    X(Struct) \
+    X(Match) \
+    X(MatchArm)
 
 enum class AstNodeType
 {
@@ -615,6 +638,35 @@ struct AstDefer : AstNode
 struct AstNamedReference : AstNode
 {
     Token token;
+};
+
+struct AstEnumValue : AstNode
+{
+    Token identifier;
+    AstNode* init;
+};
+
+struct AstEnum : AstNode
+{
+    AstNode* type_expr;
+    AstNodeList values; // AstEnumValue[]
+};
+
+struct AstMatchArm : AstNode
+{
+    AstNode* pattern;
+    AstNode* body;
+};
+
+struct AstMatch : AstNode
+{
+    AstNode* expr;
+    AstNodeList arms; // AstMatchArm[]
+};
+
+struct AstStruct : AstNode
+{
+    AstNodeList body;
 };
 
 struct AstOpExpr : AstNode
@@ -766,6 +818,44 @@ void ast_debug_print(AstNode* root)
             },
             [&](const AstNamedReference& node) {
                 print("Named_Reference({})", node.token.raw);
+            },
+            [&](const AstEnumValue& node) {
+                print("EnumValue({})", node.identifier.raw);
+                if (node.init) {
+                    print_node(node.init, depth + 1);
+                }
+            },
+            [&](const AstEnum& node) {
+                print("Enum");
+                HEADING_INDENT;
+                if (node.type_expr) {
+                    print(HEADING_PREFIX "Type");
+                    print_node(node.type_expr, depth + 1);
+                }
+                if (node.values.head) {
+                    print(HEADING_PREFIX "Values");
+                    for (auto v = node.values.head; v; v = v->next) {
+                        print_node(v, depth + 1);
+                    }
+                }
+            },
+            [&](const AstStruct& node) {
+                print("Struct");
+                for (auto f = node.body.head; f; f = f->next) {
+                    print_node(f, depth + 1);
+                }
+            },
+            [&](const AstMatchArm& node) {
+                print("MatchArm");
+                print_node(node.pattern, depth + 1);
+                print_node(node.body, depth + 1);
+            },
+            [&](const AstMatch& node) {
+                print("Match");
+                print_node(node.expr, depth + 1);
+                for (auto a = node.arms.head; a; a = a->next) {
+                    print_node(a, depth + 1);
+                }
             },
             [&](const AstOpExpr& node) {
                 print("Operator({})", get_op_name(node.op));

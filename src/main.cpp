@@ -86,6 +86,26 @@ if x { 2 } else { 3 }
 x :: 1;
 x + 1;
 
+bar :: enum {
+    alpha,
+    bravo,
+    charlie,
+};
+
+foo :: struct {
+    t: bar;
+    x: i32;
+    y :: 0;
+};
+
+bar_str :: (v) {
+    match v {
+        bar.alpha   -> { "alpha"   }
+        bar.bravo   -> { "bravo"   }
+        bar.charlie -> { "charlie" }
+    }
+}
+
     )";
 
 #if 0
@@ -265,7 +285,8 @@ x :: 123;
 
     CompileJobSystem job_system;
     for (auto fragment = fragments.head; fragment; fragment = fragment->next) {
-        job_system.add_fragment(fragment, file_context);
+        // job_system.add_fragment(fragment, file_context);
+        ast_debug_print(fragment);
     }
 
     log_info("");

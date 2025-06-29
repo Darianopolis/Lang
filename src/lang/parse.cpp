@@ -84,15 +84,15 @@ auto OperatorOrdering = []{
 
     // General operator strata
 
-    order({{ LANG_OPS_All }, { None }});
+    order({{ OPS_All }, { None }});
 
     order({
-        { LANG_OPS_Postfix LANG_OPS_Prefix },
-        { LANG_OPS_Arithmetic LANG_OPS_Bitwise },
-        { LANG_OPS_Comparison },
-        { LANG_OPS_Logical },
-        { LANG_OPS_Range },
-        { LANG_OPS_ControlFlow },
+        { OPS_Postfix OPS_Prefix },
+        { OPS_Arithmetic OPS_Bitwise },
+        { OPS_Comparison },
+        { OPS_Logical },
+        { OPS_Range },
+        { OPS_ControlFlow },
     });
 
     // Post-/Pre-fix
@@ -121,31 +121,31 @@ auto OperatorOrdering = []{
 
     // Assignment / Variable Declaration
 
-    order({{ LANG_OPS_Prefix }, { LANG_OPS_Assign }});
+    order({{ OPS_Prefix }, { OPS_Assign }});
     bind(Right,
         {
-            LANG_OPS_Assign
-            LANG_OPS_VarDecl
+            OPS_Assign
+            OPS_VarDecl
         },
         {
-            LANG_OPS_Postfix
-            LANG_OPS_Arithmetic
-            LANG_OPS_Bitwise
-            LANG_OPS_Comparison
-            LANG_OPS_Logical
-            LANG_OPS_Range
+            OPS_Postfix
+            OPS_Arithmetic
+            OPS_Bitwise
+            OPS_Comparison
+            OPS_Logical
+            OPS_Range
         });
-    assoc(RightToLeft, {{ LANG_OPS_Assign }});
-    bind(Right, { LANG_OPS_VarDecl }, { LANG_OPS_Assign });
+    assoc(RightToLeft, {{ OPS_Assign }});
+    bind(Right, { OPS_VarDecl }, { OPS_Assign });
 
     // Control Flow
 
-    bind(Right, { LANG_OPS_VarDecl }, { LANG_OPS_ControlFlow });
-    bind(Right, { LANG_OPS_ControlFlow }, { LANG_OPS_Assign });
+    bind(Right, { OPS_VarDecl }, { OPS_ControlFlow });
+    bind(Right, { OPS_ControlFlow }, { OPS_Assign });
 
     // Output
 
-    log_debug("Defined {} operator relationships for {} operators", lookup.size(), std::array { LANG_OPS_All }.size());
+    log_debug("Defined {} operator relationships for {} operators", lookup.size(), std::array { OPS_All }.size());
 
 #undef X
 
@@ -199,6 +199,13 @@ struct Parser
     {
         if (iter.peek().raw != raw.str) raise_error("{}, got {}", message, iter.peek().raw);
         iter.advance();
+    }
+
+    Token consume_identifier(std::string_view message)
+    {
+        auto token = iter.advance();
+        if (token.type != TokenType::Identifier) raise_error("{}, got {}", message, token.raw);
+        return token;
     }
 
 // -------------------------------------------------------------------------
@@ -291,7 +298,7 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (match(";")) return {nullptr, false};
+        if (match(";") || iter.is_at_end()) return {nullptr, false};
 
         // Block expression
 
@@ -452,6 +459,98 @@ struct Parser
     }
 
     LANG_FORCEINLINE
+    AstStruct* finish_struct()
+    {
+        consume("{", "expected '{' following struct type introduction");
+
+        AstNodeListBuilder stmts;
+
+        while (!iter.is_at_end() && iter.peek().raw != lang_str("}")) {
+            auto[stmt, is_terminal] = statement();
+            if (!stmt) continue;
+            stmts.append(stmt);
+            if (is_terminal) {
+                raise_error("terminal expressions not allowed at file scope");
+            }
+            if (stmt->type != AstNodeType::VarDecl) {
+                raise_error("struct declaration body may only continue declarations");
+            }
+        }
+
+        consume("}", "expected '}' to close struct body");
+
+        return new AstStruct{{AstNodeType::Struct}, stmts.to_list()};
+    }
+
+    LANG_FORCEINLINE
+    AstEnumValue* enum_value()
+    {
+        auto ident = consume_identifier("expected identifier in enum value");
+
+        AstNode* init{};
+        if (match("=")) {
+            init = expression(Operator::None);
+        }
+
+        return new AstEnumValue{{AstNodeType::EnumValue}, ident, init};
+    }
+
+    LANG_FORCEINLINE
+    AstEnum* finish_enum()
+    {
+        AstNode* type{};
+        if (match(":")) {
+            type = expression(Operator::None, ExpressionMode::TypeAnnotation);
+        }
+
+        consume("{", "expected '{' following enum type introduction");
+
+        AstNodeListBuilder values;
+
+        for (;;) {
+            if (iter.is_at_end() || is("}")) break;
+
+            values.append(enum_value());
+
+            if (!match(",")) break;
+        }
+
+        consume("}", "expected '}' following enum declaration body");
+
+        return new AstEnum{{AstNodeType::Enum}, type, values.to_list()};
+    }
+
+    LANG_FORCEINLINE
+    AstNode* finish_match()
+    {
+        auto* expr = expression();
+        consume("{", "expected '{' followed match expression");
+
+        AstNodeListBuilder arms;
+
+        for (;;) {
+            if (iter.is_at_end() || is("}")) break;
+
+            auto pattern = expression();
+            consume("->", "expected '->' following match expression");
+            auto body = block();
+
+            arms.append(new AstMatchArm{{AstNodeType::MatchArm}, pattern, body});
+        }
+
+        consume("}", "expected '}' following match body");
+
+        return new AstMatch{{AstNodeType::Match}, expr, arms.to_list()};
+    }
+
+    LANG_FORCEINLINE
+    AstNode* named_identifier()
+    {
+        auto token = consume_identifier("expected identifier");
+        return new AstNamedReference{{AstNodeType::NamedReference}, token};
+    }
+
+    LANG_FORCEINLINE
     AstNode* maybe_non_recursive_expression()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -463,9 +562,14 @@ struct Parser
         auto next = iter.peek();
         switch (next.type) {
             case TokenType::Keyword:
-                if (next.raw == "true" || next.raw == "false") {
-                    iter.advance();
+                if (match("true") || match("false")) {
                     return new AstLiteral{{AstNodeType::Literal}, next};
+                }  if (match("enum")) {
+                    return finish_enum();
+                } else if (match("struct")) {
+                    return finish_struct();
+                } else if (match("match")) {
+                    return finish_match();
                 }
                 break;
             case TokenType::Number:
@@ -473,8 +577,7 @@ struct Parser
                 iter.advance();
                 return new AstLiteral{{AstNodeType::Literal}, next};
             case TokenType::Identifier:
-                iter.advance();
-                return new AstNamedReference{{AstNodeType::NamedReference}, next};
+                return named_identifier();
             case TokenType::Punctuation:
                 if (next.punctuation.value == "(") {
                     if (auto func = maybe_function()) {
