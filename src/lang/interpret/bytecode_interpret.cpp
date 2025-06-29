@@ -1,5 +1,5 @@
 
-#include "interpret.hpp"
+#include "bytecode.hpp"
 
 NAMESPACE_BEGIN(lang)
 
@@ -10,13 +10,13 @@ FileContext* file_context_create()
     };
 }
 
-ExecutionContext* execution_context_create(FileContext* file, BytecodeChunk* chunk)
+BytecodeExecutionContext* bytecode_execution_context_create(FileContext* file, BytecodeChunk* chunk)
 {
-    return new ExecutionContext {
-        .file = file,
-        .chunk = chunk,
-        .ip = 0,
-    };
+    auto ctx = new BytecodeExecutionContext{};
+    ctx->file = file;
+    ctx->chunk = chunk;
+    ctx->ip = 0;
+    return ctx;
 }
 
 struct LoadResult
@@ -25,7 +25,7 @@ struct LoadResult
     Value* blocking_access = nullptr;
 };
 
-static Value* load_value(ExecutionContext* context, Value* value, LoadResult& load_res)
+static Value* load_value(BytecodeExecutionContext* context, Value* value, LoadResult& load_res)
 {
     switch (value->type) {
         case ValueType::NamespaceAccess: {
@@ -53,7 +53,7 @@ static Value* load_value(ExecutionContext* context, Value* value, LoadResult& lo
     }
 }
 
-LoadResult try_pop_and_load_values(ExecutionContext* context, Value** out_values, u32 num_values)
+LoadResult try_pop_and_load_values(BytecodeExecutionContext* context, Value** out_values, u32 num_values)
 {
     for (u32 i = 0; i < num_values; ++i) {
         auto preload = context->stack.back();
@@ -77,8 +77,10 @@ LoadResult try_pop_and_load_values(ExecutionContext* context, Value** out_values
     return { false };
 }
 
-ExecutionResult execution_context_run(ExecutionContext* context)
+ExecutionResult BytecodeExecutionContext::run()
 {
+    auto context = this;
+
     auto& bytecode = context->chunk->bytecode;
     auto& stack = context->stack;
 

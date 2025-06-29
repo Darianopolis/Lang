@@ -73,8 +73,6 @@ z :: 4;
 x :: 0;
 if x { 2 } else { 3 }
 
-]]]
-
 {
     x := 0;
     while x < 10 {
@@ -82,6 +80,11 @@ if x { 2 } else { 3 }
         x = x + 1;
     }
 }
+
+]]]
+
+x :: 1;
+x + 1;
 
     )";
 
@@ -127,8 +130,41 @@ main :: () {
     println("fib({}) = {}", x, fib(x));
 };
 
+my_enum :: enum {
+    alpha,
+    bravo,
+    charlie
+};
+
+gen_to_string_matches :: (e) {
+    tokens := ${}
+    for e -> (v) {
+        tokens += ${
+            \{v} -> { \{v.name()} }
+        };
+    }
+    tokens
+}
+
+gen_to_string_match :: (e, token_seq) {
+    ${
+        match \{token_seq} {
+            \{gen_to_string_matches(e)}
+        }
+    }
+}
+
 {
-    123
+    \{gen_to_string_match(my_enum, ${e})}
+
+    #[[
+        Expands to
+        match e {
+            my_enum::alpha   -> { "alpha"   }
+            my_enum::bravo   -> { "bravo"   }
+            my_enum::charlie -> { "charlie" }
+        }
+    ]]
 }
 
 print(x);
@@ -191,7 +227,7 @@ x :: 123;
         }
 
         auto message = std::format("{:4} ", iter.index());
-        for (auto i = 0; i < indent; ++i) {
+        for (auto i = 0; i < indent0; ++i) {
             message += indent_str;
         }
         message += token.raw;

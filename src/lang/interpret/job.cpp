@@ -1,9 +1,18 @@
 #include "interpret.hpp"
 
+#define USE_BYTECODE_INTERPRETER 1
+
+#if USE_BYTECODE_INTERPRETER
+#include "bytecode.hpp"
+#else
+#include "treewalk.hpp"
+#endif
+
 NAMESPACE_BEGIN(lang)
 
 void CompileJobSystem::add_fragment(AstNode* n, FileContext* file_context)
 {
+#if USE_BYTECODE_INTERPRETER
     auto bytecode = bytecode_generate(n);
 
     log_debug("");
@@ -12,9 +21,18 @@ void CompileJobSystem::add_fragment(AstNode* n, FileContext* file_context)
     log_debug("==== Bytecode ====");
     bytecode_debug_print(bytecode);
 
-    auto context = execution_context_create(file_context, bytecode);
+    auto context = bytecode_execution_context_create(file_context, bytecode);
     context->job_system = this;
     unblocked.emplace_back(context);
+#else
+    log_debug("");
+    log_debug("==== Fragment ====");
+    ast_debug_print(n);
+
+    auto context = treewalk_execution_context_create(file_context, n);
+    context->job_system = this;
+    unblocked.emplace_back(context);
+#endif
 }
 
 void CompileJobSystem::try_unblock(NamespaceAccess* access)
@@ -40,10 +58,10 @@ void CompileJobSystem::compile()
 
         log_debug("running context [{}]", (void*)context);
 
-        auto res = execution_context_run(context);
+        auto res = context->run();
         if (res.code == ExecutionResultCode::Blocked) {
             if (!res.value || res.value->type != ValueType::NamespaceAccess) {
-                raise_error("expected NamespaceAccess as value when execution blocked");
+                raise_error("expected NamespaceAccess as value when execution blocked, got: {}", res.value ? get_value_type_name(res.value->type) : "nullptr");
             }
             blocked.emplace_back(context, static_cast<NamespaceAccess*>(res.value));
             log_debug("  blocked!");

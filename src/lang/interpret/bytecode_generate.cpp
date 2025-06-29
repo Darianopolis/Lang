@@ -1,4 +1,4 @@
-#include "interpret.hpp"
+#include "bytecode.hpp"
 
 NAMESPACE_BEGIN(lang)
 
