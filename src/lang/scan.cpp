@@ -45,7 +45,8 @@ bool is_hexadecimal_digit(u8 c)
     case '(': case ')': case '[': case ']': case '{': case '}': \
     case ',': case '.': case '+': case ':': case ';': case '*': \
     case '!': case '=': case '>': case '<': case '-': case '%': \
-    case '&': case '|': case '^': case '~': case '?': case '/'
+    case '&': case '|': case '^': case '~': case '?': case '/': \
+    case '$': case '\\'
 
 bool is_ascii_alpha(u8 c)
 {
@@ -152,27 +153,31 @@ struct ScanState
     {
         auto raw_start = position;
 
-        static constexpr auto is_valid_punc = [](std::string_view str)
-        {
-            for (auto& punc : PunctuationSequences) {
-                if (punc == str) return true;
-            }
-            return false;
-        };
+        static constexpr auto OrderedPunctuationSequences = [] {
+            std::array out = PunctuationSequences;
+            std::ranges::sort(out, std::greater{}, [&](const auto& v) { return v.size(); });
+            return out;
+        }();
 
-        while (advance()) {
-            // Try to consume the largest valid punctuation sequence
-            if (!is_valid_punc(source.substr(raw_start, position + 1 - raw_start))) {
+        std::string_view matched;
+        for (auto& punc : OrderedPunctuationSequences) {
+            auto str = source.substr(raw_start, punc.size());
+            if (str == punc) {
+                matched = str;
                 break;
             }
         }
 
-        auto sub = source.substr(raw_start, position - raw_start);
+        if (matched.empty()) {
+            raise_error("punctuation sequence starting with [{}] did not match any valid langauge sequences", source[raw_start]);
+        }
+
+        position += matched.size();
 
         token = {
             .type = TokenType::Punctuation,
-            .raw = sub,
-            .punctuation = { .value = sub },
+            .raw = matched,
+            .punctuation = { .value = matched },
         };
     }
 
@@ -435,29 +440,40 @@ TokenList lang::scan(std::string_view source)
         auto i = list.tokens.size();
         if (scanner.token.type == TokenType::Punctuation) {
             auto b = scanner.token.punctuation.value;
-            if (b == "{" || b == "[" || b == "(") {
-                beginning_tokens.emplace_back(i);
-            }
-            else if (b == "}" || b == "]" || b == ")") {
-                if (beginning_tokens.empty()) {
-                    raise_error("unexpected closing '{}' - no matching open", b);
-                }
-                auto& begin_token = list.tokens[beginning_tokens.back()];
-                auto a = begin_token.punctuation.value;
-                u8 expected = '\0';
-                switch (b[0]) {
-                    case '}': expected = '{'; break;
-                    case ']': expected = '['; break;
-                    case ')': expected = '('; break;
-                }
-                if (a[0] != expected) {
-                    raise_error("mismatched pair - found closing '{}' but last open was '{}'", b, a);
-                }
 
-                begin_token.punctuation.matching = i;
-                scanner.token.punctuation.matching = beginning_tokens.back();
+            switch (make_opstr(RuntimeLangString(b))) {
+                case make_opstr("{"):
+                case make_opstr("["):
+                case make_opstr("("):
+                case make_opstr("${"):
+                case make_opstr("\\{"):
+                case make_opstr("\\id{"): {
+                    beginning_tokens.emplace_back(i);
+                    break;
+                }
+                case make_opstr("}"):
+                case make_opstr("]"):
+                case make_opstr(")"): {
+                    if (beginning_tokens.empty()) {
+                        raise_error("unexpected closing '{}' - no matching open", b);
+                    }
+                    auto& begin_token = list.tokens[beginning_tokens.back()];
+                    auto a = begin_token.punctuation.value;
+                    u8 expected = '\0';
+                    switch (b[0]) {
+                        case '}': expected = '{'; break;
+                        case ']': expected = '['; break;
+                        case ')': expected = '('; break;
+                    }
+                    if (a.back() != expected) {
+                        raise_error("mismatched pair - found closing '{}' but last open was '{}'", b, a);
+                    }
 
-                beginning_tokens.pop_back();
+                    begin_token.punctuation.matching = i;
+                    scanner.token.punctuation.matching = beginning_tokens.back();
+
+                    beginning_tokens.pop_back();
+                }
             }
         }
         list.tokens.emplace_back(scanner.token);

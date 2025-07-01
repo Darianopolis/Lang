@@ -269,6 +269,8 @@ struct Parser
             return finish_while();
         } else if (match("{")) {
             return finish_block();
+        } else if (is("\\{")) {
+            return splice();
         }
 
         return nullptr;
@@ -472,8 +474,8 @@ struct Parser
             if (is_terminal) {
                 raise_error("terminal expressions not allowed at file scope");
             }
-            if (stmt->type != AstNodeType::VarDecl) {
-                raise_error("struct declaration body may only continue declarations");
+            if (stmt->type != AstNodeType::VarDecl && stmt->type != AstNodeType::Splice) {
+                raise_error("struct declaration body may only continue declarations and splices");
             }
         }
 
@@ -531,16 +533,59 @@ struct Parser
         for (;;) {
             if (iter.is_at_end() || is("}")) break;
 
-            auto pattern = expression();
-            consume("->", "expected '->' following match expression");
-            auto body = block();
+            if (is("\\{")) {
+                arms.append(splice());
+            } else {
+                auto pattern = expression();
+                consume("->", "expected '->' following match expression");
+                auto body = block();
 
-            arms.append(new AstMatchArm{{AstNodeType::MatchArm}, pattern, body});
+                arms.append(new AstMatchArm{{AstNodeType::MatchArm}, pattern, body});
+            }
         }
 
         consume("}", "expected '}' following match body");
 
         return new AstMatch{{AstNodeType::Match}, expr, arms.to_list()};
+    }
+
+    AstTokenSequence* token_sequence()
+    {
+        auto open = iter.advance();
+
+        AstNodeListBuilder builder;
+
+        while (iter.index() != open.punctuation.matching) {
+            if (is("\\{")) {
+                builder.append(splice());
+            } else if (is("\\id{")) {
+                builder.append(splice_identifier());
+            } else {
+                builder.append(new AstTokenBasic{{AstNodeType::TokenBasic}, iter.advance()});
+            }
+        }
+
+        iter.advance();
+
+        return new AstTokenSequence{{AstNodeType::TokenSequence}, builder.to_list()};
+    }
+
+    AstSpliceIdentifier* splice_identifier()
+    {
+        consume("\\id{", "expected '\\id{' to introduce splice identifier");
+
+        auto block = finish_block();
+
+        return new AstSpliceIdentifier{{AstNodeType::SpliceIdentifier}, block};
+    }
+
+    AstSplice* splice()
+    {
+        consume("\\{", "expected '\\{' to introduce splice");
+
+        auto block = finish_block();
+
+        return new AstSplice{{AstNodeType::Splice}, block};
     }
 
     LANG_FORCEINLINE
@@ -579,7 +624,10 @@ struct Parser
             case TokenType::Identifier:
                 return named_identifier();
             case TokenType::Punctuation:
-                if (next.punctuation.value == "(") {
+                if (is("${")) {
+                    return token_sequence();
+                }
+                if (next.punctuation.value == lang_str("(")) {
                     if (auto func = maybe_function()) {
                         return func;
                     } else {

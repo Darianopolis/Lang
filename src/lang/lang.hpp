@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <variant>
+#include <algorithm>
 
 NAMESPACE_BEGIN(lang)
 
@@ -19,8 +20,7 @@ constexpr std::array Keywords
     "struct", "enum",
 };
 
-constexpr std::array PunctuationSequences
-{
+constexpr auto PunctuationSequences = std::to_array<std::string_view>({
     "^",    // dereference
 
     "+",    // arithmetic identity / add
@@ -64,6 +64,10 @@ constexpr std::array PunctuationSequences
     "{", "}",   // braces
     "[", "]",   // brackets
 
+    "${",       // token sequence introducer
+    "\\{",      // code splice
+    "\\id{",    // identifier splice
+
     ".",    // field access
     "..",   // range exclusive
     "..=",  // range inclusive
@@ -73,8 +77,7 @@ constexpr std::array PunctuationSequences
     ",",    // expression delimiter
 
     "?",    // *reserved
-};
-
+});
 
 consteval std::string_view lang_str(std::string_view str)
 {
@@ -369,7 +372,7 @@ struct TokenList
     TokenIterator matching_pair_for(Token token) const;
 };
 
-#define LANG_NOISY_TOKEN_ITERATOR 1
+#define LANG_NOISY_TOKEN_ITERATOR 0
 
 struct TokenIterator
 {
@@ -508,7 +511,12 @@ TokenList scan(std::string_view);
     X(EnumValue) \
     X(Struct) \
     X(Match) \
-    X(MatchArm)
+    X(MatchArm) \
+    X(TokenSequence) \
+    X(TokenBasic) \
+    X(TokenValueLiteral) \
+    X(Splice) \
+    X(SpliceIdentifier) \
 
 enum class AstNodeType
 {
@@ -702,6 +710,33 @@ struct AstFieldAccess : AstNode
     Token field;
 };
 
+struct AstTokenSequence : AstNode
+{
+    // TODO: Lexical scope capture
+
+    AstNodeList tokens;
+};
+
+struct AstTokenBasic : AstNode
+{
+    Token token;
+};
+
+struct AstTokenValueLiteral : AstNode
+{
+    struct Value* value;
+};
+
+struct AstSplice : AstNode
+{
+    AstNode* expr;
+};
+
+struct AstSpliceIdentifier : AstNode
+{
+    AstNode* expr;
+};
+
 template<class Ret = void, class Fn>
 Ret visit(Fn&& fn, AstNode* expr)
 {
@@ -723,6 +758,7 @@ bool is_ast_node_block_expr(AstNode* t)
         case AstNodeType::While:
         case AstNodeType::Defer:
         case AstNodeType::Block:
+        case AstNodeType::Splice:
             return true;
         case AstNodeType::Function:
             return static_cast<AstFunction*>(t)->body;
@@ -909,6 +945,23 @@ void ast_debug_print(AstNode* root)
             [&](const AstDefer& node) {
                 print("Defer");
                 print_block_body(node.body);
+            },
+            [&](const AstTokenSequence& node) {
+                print("TokenSequence");
+                for (auto t = node.tokens.head; t; t = t->next) {
+                    print_node(t, depth + 1);
+                }
+            },
+            [&](const AstTokenBasic& node) {
+                print("TokenBasic {}", node.token.raw);
+            },
+            [&](const AstSplice& node) {
+                print("Splice");
+                print_block_body(node.expr);
+            },
+            [&](const AstSpliceIdentifier& node) {
+                print("SpliceIdentifier");
+                print_block_body(node.expr);
             },
             [&](const auto& node) {
                 log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));

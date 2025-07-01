@@ -13,6 +13,9 @@ NAMESPACE_USE(lang)
 std::string read_file(std::string_view path)
 {
     std::ifstream in(std::filesystem::path(path), std::ios::in | std::ios::binary | std::ios::ate);
+    if(!in.is_open()) {
+        raise_error("failed to open file [{}]", path);
+    }
     auto len = in.tellg();
     in.seekg(0);
     std::string message;
@@ -44,8 +47,9 @@ int main()
     // auto message = "a & b > c && d";
     // auto message = "main :: () { print(\"Hello, world\") }";
 
-//     auto message = R"(
+    // auto message = read_file("test/vulkan_test.lang");
 
+#if 1
     auto message = R"(
 
 #[[[
@@ -83,30 +87,50 @@ if x { 2 } else { 3 }
 
 ]]]
 
-x :: 1;
-x + 1;
-
-bar :: enum {
+my_enum :: enum {
     alpha,
     bravo,
-    charlie,
+    charlie
 };
 
-foo :: struct {
-    t: bar;
-    x: i32;
-    y :: 0;
-};
-
-bar_str :: (v) {
-    match v {
-        bar.alpha   -> { "alpha"   }
-        bar.bravo   -> { "bravo"   }
-        bar.charlie -> { "charlie" }
+gen_to_string_matches :: (e) {
+    tokens := ${};
+    for e -> (v) {
+        tokens += ${
+            \{v} -> { \{v.name()} }
+        };
     }
+    tokens
+};
+
+gen_to_string_match :: (e, token_seq) {
+    ${
+        match \{token_seq} {
+            \{gen_to_string_matches(e)}
+        }
+    }
+};
+
+{
+    \{gen_to_string_match(my_enum, ${e})}
+
+    match e {
+        \{gen_to_string_matches(e)}
+        default -> { "N/A" }
+    }
+
+    #[[
+        Expands to
+        match e {
+            my_enum::alpha   -> { "alpha"   }
+            my_enum::bravo   -> { "bravo"   }
+            my_enum::charlie -> { "charlie" }
+        }
+    ]]
 }
 
     )";
+#endif
 
 #if 0
     auto message = R"(
@@ -149,43 +173,6 @@ main :: () {
 
     println("fib({}) = {}", x, fib(x));
 };
-
-my_enum :: enum {
-    alpha,
-    bravo,
-    charlie
-};
-
-gen_to_string_matches :: (e) {
-    tokens := ${}
-    for e -> (v) {
-        tokens += ${
-            \{v} -> { \{v.name()} }
-        };
-    }
-    tokens
-}
-
-gen_to_string_match :: (e, token_seq) {
-    ${
-        match \{token_seq} {
-            \{gen_to_string_matches(e)}
-        }
-    }
-}
-
-{
-    \{gen_to_string_match(my_enum, ${e})}
-
-    #[[
-        Expands to
-        match e {
-            my_enum::alpha   -> { "alpha"   }
-            my_enum::bravo   -> { "bravo"   }
-            my_enum::charlie -> { "charlie" }
-        }
-    ]]
-}
 
 print(x);
 x :: 123;
@@ -233,7 +220,7 @@ x :: 123;
     }
 #endif
 
-#if 0
+#if 1
     log_debug("matched view");
 
     auto indent_str = "  ";
@@ -247,7 +234,7 @@ x :: 123;
         }
 
         auto message = std::format("{:4} ", iter.index());
-        for (auto i = 0; i < indent0; ++i) {
+        for (auto i = 0; i < indent; ++i) {
             message += indent_str;
         }
         message += token.raw;
@@ -261,6 +248,7 @@ x :: 123;
 
     log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
 
+#if 1
     start = std::chrono::steady_clock::now();
     auto fragments = parse(tokens);
     end = std::chrono::steady_clock::now();
@@ -296,4 +284,5 @@ x :: 123;
     job_system.compile();
 
     log_debug("bytecode interpreted");
+#endif
 }
