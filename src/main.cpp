@@ -52,7 +52,7 @@ int main()
 #if 1
     auto message = R"(
 
-#[[[
+#[[
 foo :: 2;
 1.5 * bar + 3 / math.pi - 5;
 
@@ -65,14 +65,16 @@ math.pi  :: 3.14;
 x :: 2;
 x + y;
 y :: 5;
+]]
 
 z :: 4;
 
 {
     x :: 2;
-    y :: 3;
-    x * { foo :: y; foo + 1 } - z
+    x * { foo :: x; foo = foo + 2; foo } - z
 }
+
+#[[
 
 x :: 0;
 if x { 2 } else { 3 }
@@ -84,8 +86,20 @@ if x { 2 } else { 3 }
         x = x + 1;
     }
 }
+]]
+    )";
+#endif
 
-]]]
+#if 0
+    auto message = R"(
+
+accumulate_tokens :: (input, fn) {
+    tokens := ${};
+    for input -> (i) {
+        tokens += fn(i);
+    }
+    tokens
+};
 
 my_enum :: enum {
     alpha,
@@ -94,13 +108,9 @@ my_enum :: enum {
 };
 
 gen_to_string_matches :: (e) {
-    tokens := ${};
-    for e -> (v) {
-        tokens += ${
-            \{v} -> { \{v.name()} }
-        };
-    }
-    tokens
+    accumulate_tokens(e, (v) {
+        ${\{v} -> { \{v.name()} }}
+    })
 };
 
 gen_to_string_match :: (e, token_seq) {
@@ -116,7 +126,7 @@ gen_to_string_match :: (e, token_seq) {
 
     match e {
         \{gen_to_string_matches(e)}
-        default -> { "N/A" }
+        _ -> { "unknown" }
     }
 
     #[[
@@ -125,6 +135,7 @@ gen_to_string_match :: (e, token_seq) {
             my_enum::alpha   -> { "alpha"   }
             my_enum::bravo   -> { "bravo"   }
             my_enum::charlie -> { "charlie" }
+            _                -> { "unknown" }
         }
     ]]
 }
@@ -273,8 +284,8 @@ x :: 123;
 
     CompileJobSystem job_system;
     for (auto fragment = fragments.head; fragment; fragment = fragment->next) {
-        // job_system.add_fragment(fragment, file_context);
-        ast_debug_print(fragment);
+        job_system.add_fragment(fragment, file_context);
+        // ast_debug_print(fragment);
     }
 
     log_info("");

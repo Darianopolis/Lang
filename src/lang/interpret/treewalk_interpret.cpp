@@ -1,3 +1,4 @@
+#if 0
 #include "treewalk.hpp"
 
 NAMESPACE_BEGIN(lang)
@@ -152,3 +153,4 @@ ExecutionResult TreeWalkExecutionContext::run()
 }
 
 NAMESPACE_END
+#endif

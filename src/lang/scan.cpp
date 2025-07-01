@@ -118,7 +118,10 @@ struct ScanState
         if (count) {
             // multi-line
 
-            while (!is_at_end()) {
+            for (;;) {
+                if (is_at_end()) {
+                    raise_error("reached end-of-file parsing block comment");
+                }
                 auto c = peek();
                 if (c == '#' && peek_next() == '[') {
                     skip_comment();

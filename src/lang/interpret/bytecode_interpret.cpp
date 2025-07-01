@@ -44,8 +44,11 @@ static Value* load_value(BytecodeExecutionContext* context, Value* value, LoadRe
             }
         }
         case ValueType::LocalAccess: {
+            log_trace("-- Loading from {}", value_to_string(value));
             auto local_access = static_cast<LocalAccess*>(value);
-            return context->stack[local_access->local_index];
+            auto val = context->stack[local_access->local_index];
+            log_trace("     yielded {}", value_to_string(val));
+            return val;
         }
         default:
             load_res = { false };
@@ -126,7 +129,11 @@ ExecutionResult BytecodeExecutionContext::run()
         log_trace(">> ip = {} stack.size = {} stack = [{} ]", ip, stack.size(), stack_contents);
 
         auto& instr = bytecode[ip];
-        log_trace("   op = {}", get_opcode_name(instr.opcode));
+        if (instr.opcode == Opcode::Operator) {
+            log_trace("   op = Operator '{}'", get_op_name(instr.op));
+        } else {
+            log_trace("   op = {}", get_opcode_name(instr.opcode));
+        }
         switch (instr.opcode) {
             case Opcode::LoadNil: {
                 stack.emplace_back(nullptr);
@@ -156,8 +163,22 @@ ExecutionResult BytecodeExecutionContext::run()
                 break;
             }
             case Opcode::LoadLocal: {
-                push(tag_value(new LocalAccess{ .local_index = instr.stack_index }));
-                // push(stack.at(instr.stack_index));
+                auto value = stack[instr.stack_index];
+                if (value->type == ValueType::LocalAccess) {
+                   push(stack.at(instr.stack_index));
+                } else {
+                    push(tag_value(new LocalAccess{ .local_index = instr.stack_index }));
+                }
+                break;
+            }
+            case Opcode::LoadImmediate: {
+                std::array<Value*, 16> values;
+                if (auto res = try_pop_and_load_values(context, values.data(), instr.count); res.blocked) {
+                    return { ExecutionResultCode::Blocked, res.blocking_access };
+                }
+                for (u32 i = 0; i < instr.count; ++i) {
+                    push(values[i]);
+                }
                 break;
             }
             case Opcode::FieldAccess: {
@@ -253,7 +274,13 @@ ExecutionResult BytecodeExecutionContext::run()
                 log_trace("   count = {}", instr.count);
                 auto v = pop();
                 for (u32 i = 0; i < instr.count; ++i) {
-                    pop();
+                    if (v->type == ValueType::LocalAccess && static_cast<LocalAccess*>(v)->local_index == stack.size() - 1) {
+                        // Local access escapes local life, replace with local directly
+                        log_trace("   local access escapes local, loading..");
+                        v = pop();
+                    } else {
+                        pop();
+                    }
                 }
                 push(v);
                 break;

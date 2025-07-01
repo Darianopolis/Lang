@@ -1,3 +1,4 @@
+#if 0
 #pragma once
 
 #include "interpret.hpp"
@@ -91,3 +92,4 @@ auto InterpretTask::promise_type::yield_value(struct TreeWalkExecutionContext* c
 }
 
 NAMESPACE_END
+#endif

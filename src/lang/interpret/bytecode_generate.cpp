@@ -90,6 +90,7 @@ BytecodeChunk* bytecode_generate(AstNode* node)
 
                     if (node.init) {
                         expect_yield(generate_node(node.init));
+                        emit(Opcode::LoadImmediate, 0).count = 1;
                     } else {
                         emit(Opcode::LoadNil, 1);
                     }
@@ -270,6 +271,9 @@ void bytecode_debug_print(BytecodeChunk* chunk)
                 break;
             case Opcode::LoadLocal:
                 print_instr("LOAD_LOCAL", "{}", instruction.stack_index);
+                break;
+            case Opcode::LoadImmediate:
+                print_instr("LOAD_NOW", "{}", instruction.count);
                 break;
             case Opcode::CallFunction:
                 print_instr("CALL_FUNCTION", "{}", instruction.arg_count);

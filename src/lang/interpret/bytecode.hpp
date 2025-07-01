@@ -10,6 +10,7 @@ NAMESPACE_BEGIN(lang)
     DO(LoadString) \
     DO(LoadGlobal) \
     DO(LoadLocal) \
+    DO(LoadImmediate) \
     \
     DO(CallFunction) \
     DO(CallSubscript) \
