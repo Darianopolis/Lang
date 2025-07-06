@@ -1,3 +1,4 @@
+#if 0
 #pragma once
 
 #include "interpret.hpp"
@@ -5,26 +6,31 @@
 NAMESPACE_BEGIN(lang)
 
 #define OPCODE_LIST(DO) \
-    DO(LoadNil) \
-    DO(LoadNumber) \
-    DO(LoadString) \
-    DO(LoadGlobal) \
-    DO(LoadLocal) \
-    DO(LoadImmediate) \
+    DO(LoadNil, 0) \
+    DO(LoadNumber, 8) \
+    DO(LoadString, 16) \
+    DO(LoadBoolean, 1) \
+    DO(LoadFunction, 8) \
+    DO(LoadGlobal, 16) \
+    DO(LoadLocal, 4) \
+    DO(LoadImmediate, 0) \
     \
-    DO(CallFunction) \
-    DO(CallSubscript) \
+    DO(CallFunction, 4) \
+    DO(CallSubscript, 4) \
     \
-    DO(FieldAccess) \
-    DO(NamespaceVarDecl) \
+    DO(FieldAccess, 16) \
+    DO(NamespaceVarDecl, 1) \
     \
-    DO(Operator) \
+    DO(Operator, 4) \
     \
-    DO(Pop) \
-    DO(PushDown) \
+    DO(Pop, 4) \
+    DO(PushDown, 4) \
     \
-    DO(JumpIfFalse) \
-    DO(Jump)
+    DO(JumpIfFalse, 4) \
+    DO(Jump, 4) \
+    \
+    DO(Return) \
+    DO(Halt) \
 
 #define OPCODE_DECLARE(op, ...) op,
 
@@ -43,19 +49,24 @@ std::string_view get_opcode_name(Opcode opcode)
     }
 }
 
-struct Instruction
-{
-    Opcode opcode;
-    union {
-        Token token = {};
-        Operator op;
-        u32 arg_count;
-        bool decl_has_init;
-        u32 count;
-        u32 stack_index;
-        u32 target_instruction;
-    };
-};
+// struct Instruction
+// {
+//     Opcode opcode;
+//     union {
+//         Token token = {};
+//         Operator op;
+//         u32 arg_count;
+//         bool decl_has_init;
+//         u32 count;
+//         u32 stack_index;
+//         i32 jump_delta;
+//         f64 number;
+//         bool boolean;
+//         AstFunction* ast_function;
+//     };
+// };
+
+using Instruction = uint64_t;
 
 struct BytecodeChunk
 {
@@ -63,13 +74,20 @@ struct BytecodeChunk
 };
 
 BytecodeChunk* bytecode_generate(AstNode* node);
+BytecodeChunk* bytecode_generate_function_body(AstFunction* node);
 void bytecode_debug_print(BytecodeChunk*);
+
+struct Frame
+{
+    Instruction* ip;
+    u32 stack_idx_offset;
+};
 
 struct BytecodeExecutionContext : ExecutionContext
 {
-    BytecodeChunk* chunk;
-    std::vector<Value*> stack;
-    u32 ip;
+    VmStack stack;
+
+    std::vector<Frame> frames;
 
     ExecutionResult run() final;
 };
@@ -77,3 +95,4 @@ struct BytecodeExecutionContext : ExecutionContext
 BytecodeExecutionContext* bytecode_execution_context_create(FileContext* file, BytecodeChunk* chunk);
 
 NAMESPACE_END
+#endif

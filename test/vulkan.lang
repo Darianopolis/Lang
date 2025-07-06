@@ -1,0 +1,69 @@
+# Helpers
+
+vulkan_instance_functions :: array [
+    ${EnumeratePhysicalDevices},
+    ${GetPhysicalDeviceProperties2},
+    # ...
+];
+
+vulkan_device_functions :: array [
+    ${GetDeviceQueue},
+    ${CreateCommandPool},
+    # ...
+];
+
+vulkan_declare_function :: (func_name) {
+    ${
+        \id{"PFN_vk"+ func_name};
+    }
+};
+
+vulkan_load_function :: (func_name, functions, load_fn, inst_or_dev) {
+    ${
+        \{functions}->\{func_name} = cast(\id{"PFN_vk"+ func_name}, \{functions}->\{load_fn}(\{inst_or_dev}, \{"vk"+ func_name}));
+    }
+};
+
+vulkan_load_instance_function :: (func_name, functions, instance) {
+    vulkan_load_function(func_name, functions, ${GetInstanceProcAddr}, instance)
+};
+
+vulkan_load_device_function :: (func_name, functions, device) {
+    vulkan_load_function(func_name, functions, ${GetDeviceProcAddr}, device)
+};
+
+accumulate_tokens :: (input, fn) {
+    tokens := ${};
+    for input -> (i) {
+        tokens += fn(i);
+    }
+    tokens
+};
+
+# Output
+
+VulkanFunctions :: struct {
+    \{vulkan_declare_function(${GetInstanceProcAddr})}
+    \{vulkan_declare_function(${CreateInstance})}
+    \{accumulate_tokens(vulkan_instance_functions, vulkan_declare_function)}
+    \{accumulate_tokens(vulkan_device_functions, vulkan_declare_function)}
+};
+
+init_vulkan_functions :: (functions: VulkanFunctions^, load_fn: PFN_vkGetInstanceProcAddr) {
+    functions^.GetInstanceProcAddr = load_fn;
+
+    instance: VkInstance;
+    \{vulkan_load_instance_function(${CreateInstance})}
+};
+
+load_instance_functions :: (functions: VulkanFunctions^, instance: VkInstance) {
+    \{accumulate_tokens(vulkan_instance_functions, (f) {
+        vulkan_load_instance_function(f, ${functions}, ${instance})
+    })}
+};
+
+load_device_functions :: (functions: VulkanFunctions^, device: VkDevice) {
+    \{accumulate_tokens(vulkan_device_functions, (f) {
+        vulkan_load_device_function(f, ${functions}, ${device})
+    })}
+};

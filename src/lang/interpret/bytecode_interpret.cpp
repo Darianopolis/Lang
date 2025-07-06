@@ -1,4 +1,4 @@
-
+#if 0
 #include "bytecode.hpp"
 
 NAMESPACE_BEGIN(lang)
@@ -344,3 +344,4 @@ ExecutionResult BytecodeExecutionContext::run()
 }
 
 NAMESPACE_END
+#endif

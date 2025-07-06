@@ -1,3 +1,4 @@
+#if 0
 #include "interpret.hpp"
 
 #define USE_BYTECODE_INTERPRETER 1
@@ -40,7 +41,7 @@ void CompileJobSystem::try_unblock(NamespaceAccess* access)
     std::erase_if(blocked, [&](const std::pair<ExecutionContext*, NamespaceAccess*>& pair) -> bool {
         auto[ctx, blocked_access] = pair;
         if (blocked_access->_namespace == access->_namespace
-                && blocked_access->field.raw == access->field.raw) {
+                && blocked_access->field == access->field) {
 
             unblocked.emplace_back(ctx);
 
@@ -60,10 +61,10 @@ void CompileJobSystem::compile()
 
         auto res = context->run();
         if (res.code == ExecutionResultCode::Blocked) {
-            if (!res.value || res.value->type != ValueType::NamespaceAccess) {
-                raise_error("expected NamespaceAccess as value when execution blocked, got: {}", res.value ? get_value_type_name(res.value->type) : "nullptr");
+            if (res.value.type != ValueType::NamespaceAccess) {
+                raise_error("expected NamespaceAccess as value when execution blocked, got: {}", get_value_type_name(res.value.type));
             }
-            blocked.emplace_back(context, static_cast<NamespaceAccess*>(res.value));
+            blocked.emplace_back(context, static_cast<NamespaceAccess*>(res.value.ptr));
             log_debug("  blocked!");
         } else {
             completed.emplace_back(context, res);
@@ -73,8 +74,8 @@ void CompileJobSystem::compile()
 
     for (auto[ctx, res] : completed) {
         if (res.code == ExecutionResultCode::Success) {
-            if (res.value) {
-                log_info("context [{}] completed with result: {}", (void*)ctx, value_to_string(res.value));
+            if (res.value.type != ValueType::_invalid) {
+                log_info("context [{}] completed with result: {}", (void*)ctx, value_to_string(res.value.type, res.value.ptr));
             } else {
                 log_info("context [{}] completed", (void*)ctx);
             }
@@ -85,3 +86,4 @@ void CompileJobSystem::compile()
 }
 
 NAMESPACE_END
+#endif

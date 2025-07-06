@@ -52,7 +52,7 @@ int main()
 #if 1
     auto message = R"(
 
-#[[
+#[[[
 foo :: 2;
 1.5 * bar + 3 / math.pi - 5;
 
@@ -65,7 +65,6 @@ math.pi  :: 3.14;
 x :: 2;
 x + y;
 y :: 5;
-]]
 
 z :: 4;
 
@@ -73,8 +72,6 @@ z :: 4;
     x :: 2;
     x * { foo :: x; foo = foo + 2; foo } - z
 }
-
-#[[
 
 x :: 0;
 if x { 2 } else { 3 }
@@ -86,7 +83,22 @@ if x { 2 } else { 3 }
         x = x + 1;
     }
 }
-]]
+
+x :: 1;
+if x + y < 4 { 42 } else { 64 }
+y :: 2;
+
+double(2);
+double :: (v) {
+    v * 2
+};
+
+]]]
+
+fib(40);
+fib :: (n: f64) -> f64 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+};
     )";
 #endif
 
@@ -261,26 +273,34 @@ x :: 123;
 
 #if 1
     start = std::chrono::steady_clock::now();
-    auto fragments = parse(tokens);
+    [[maybe_unused]] auto fragments = parse(tokens);
     end = std::chrono::steady_clock::now();
 
     log_debug("parsed in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
+#endif
 
+#if 1
+    for (auto f = fragments.head; f; f = f->next) {
+        ast_debug_print(f);
+    }
+#endif
+
+#if 0
     auto file_context = file_context_create();
 
-    auto math = tag_value(new Namespace{});
-    file_context->global->set("math", math);
+    // auto math = tag_value(new Namespace{});
+    // file_context->global->set("math", math);
 
-    file_context->global->set("print", tag_value(new NativeFunction {
-        .function = [](ExecutionContext* ctx, std::span<Value* const> args) -> Value* {
-            std::string message;
-            for (auto& arg : args) {
-                message += value_to_string(arg);
-            }
-            log_warn("{}", message);
-            return nullptr;
-        },
-    }));
+    // file_context->global->set("print", tag_value(new NativeFunction {
+    //     .function = [](ExecutionContext* ctx, std::span<Value* const> args) -> Value* {
+    //         std::string message;
+    //         for (auto& arg : args) {
+    //             message += value_to_string(arg);
+    //         }
+    //         log_warn("{}", message);
+    //         return nullptr;
+    //     },
+    // }));
 
     CompileJobSystem job_system;
     for (auto fragment = fragments.head; fragment; fragment = fragment->next) {
@@ -292,8 +312,10 @@ x :: 123;
 
     log_debug("bytecode generated");
 
+    start = std::chrono::steady_clock::now();
     job_system.compile();
+    end = std::chrono::steady_clock::now();
 
-    log_debug("bytecode interpreted");
+    log_debug("interpreted in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
 #endif
 }

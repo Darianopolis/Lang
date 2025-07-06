@@ -724,7 +724,7 @@ struct AstTokenBasic : AstNode
 
 struct AstTokenValueLiteral : AstNode
 {
-    struct Value* value;
+    struct ValueRef* value;
 };
 
 struct AstSplice : AstNode
@@ -746,6 +746,19 @@ Ret visit(Fn&& fn, AstNode* expr)
 NodeTypes
 #undef X
     }
+}
+
+template<typename Expected>
+Expected* ast_expect_node(AstNode* expr)
+{
+#define X(t, ...) if constexpr (std::same_as<Expected, Ast##t>) { \
+    if (!expr) raise_error("ast_expect_node expected [{}] got nullptr", #t); \
+    if (expr->type != AstNodeType::t) raise_error("ast_expect_node expected [{}] got [{}]", \
+        #t, get_ast_node_type_name(expr->type)); \
+}
+NodeTypes
+#undef X
+    return static_cast<Expected*>(expr);
 }
 
 constexpr
