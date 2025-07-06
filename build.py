@@ -10,21 +10,36 @@ import glob
 
 # -----------------------------------------------------------------------------
 
+color_debug = "\u001B[96m"
 color_info = "\u001B[94m"
 color_warn = "\u001B[93m"
 color_fatal = "\u001B[91m"
 color_reset = "\u001B[0m"
 
-def info(message):
+clear_line = "\x1b[1K\r"
+
+def log_debug(message):
+    print(f" [{color_debug}INFO{color_reset}] {message}")
+
+def log_info(message):
     print(f" [{color_info}INFO{color_reset}] {message}")
 
-def warn(message):
+def log_info_progress(message):
+    print(f"{clear_line} [{color_info}INFO{color_reset}] {message}", end = '')
+
+def log_info_progress_clear():
+    print(clear_line, end = '\r')
+
+def log_info_progress_end():
+    print()
+
+def log_warn(message):
     print(f" [{color_warn}WARN{color_reset}] {message}")
 
-def error(message):
+def log_error(message):
     print(f"[{color_fatal}ERROR{color_reset}] {message}")
 
-def fatal(message, code = 1):
+def panic(message, code = 1):
     print(f"[{color_fatal}FATAL{color_reset}] {message}")
     sys.exit(code)
 
@@ -35,6 +50,7 @@ def fatal(message, code = 1):
 parser = argparse.ArgumentParser()
 parser.add_argument("-U", "--update", action="store_true", help="Update")
 parser.add_argument("-V", "--verbose", action="store_true", help="Verbose")
+parser.add_argument("-M", "--mode", default="RelWithDebInfo", help="Set build mode")
 args = parser.parse_args()
 
 # ------------------------------------------------------------------------------
@@ -69,11 +85,11 @@ def git_source(name, url, branch, dumb = False):
 
     if os.path.exists(f"{path}"):
         if args.update:
-            info(f"Updating [{name}]")
+            log_info(f"Updating [{name}]")
             subprocess.Popen(["git", "pull"], executable = git_path, cwd = path).wait()
             subprocess.Popen(["git", "submodule", "update", "--depth", "1", "--recursive"], executable = git_path, cwd = path).wait()
     else:
-        info(f"Cloning [{name}]")
+        log_info(f"Cloning [{name}]")
         subprocess.Popen(["git", "clone", "-b", branch, "--recursive", url, path], executable = git_path).wait()
 
     return path
@@ -84,6 +100,37 @@ includes = []
 source_includes = {}
 links = []
 path_links = []
+
+compiler_warning_flags = [
+    "-Wpedantic",
+    "-Wall",
+
+    "-Wno-missing-field-initializers",
+    "-Wno-gnu-conditional-omitted-operand",
+    "-Wno-comment",
+    "-Wno-binding-in-condition",
+    "-Wno-deprecated-declarations",
+    "-Wno-unused-function",
+    "-Wno-nested-anon-types",
+
+    "-Wno-gnu-label-as-value",
+    "-Wno-c99-designator",
+    "-Wno-gnu-case-range",
+
+    "-Wimplicit-fallthrough",
+]
+
+build_mode_flags = {
+    "Debug":          [ "-g", "-O0", "-fsanitize=undefined,address" ],
+    "RelWithDebInfo": [ "-g", "-O2", "-fno-omit-frame-pointer" ],
+    "Release":        [ "-O2" ],
+}
+
+build_mode = args.mode
+if not build_mode in build_mode_flags:
+    panic(f"Unrecognised build mode: {build_mode}")
+else:
+    log_info(f"{build_mode}")
 
 def define(v):
     global defines
@@ -120,8 +167,6 @@ def build():
 
     compile_commands = []
 
-    info("compiling...")
-
     for s, external in sources:
         filename = Path(s.replace('\\', '-').replace('/', '-')).with_suffix(".o")
         output = f"{object_folder}/{filename}"
@@ -133,27 +178,13 @@ def build():
         if args.verbose:
             command += ["-v"]
 
-        command += ["-g", "-O0", "-fno-omit-frame-pointer"]
+        command += ["-o", output, s]
 
         if not external:
             command += ["-Werror"]
 
-        command += [
-            "-Wpedantic",
-            "-Wall",
-
-            "-Wno-missing-field-initializers",
-            "-Wno-gnu-conditional-omitted-operand",
-            "-Wno-comment",
-            "-Wno-binding-in-condition",
-            "-Wno-deprecated-declarations",
-            "-Wno-unused-function",
-            "-Wno-nested-anon-types",
-
-            "-Wimplicit-fallthrough",
-            ]
-
-        command += ["-o", output, s]
+        command += compiler_warning_flags
+        command += build_mode_flags[build_mode]
 
         for i in includes:
             command += ["-I", i]
@@ -180,32 +211,36 @@ def build():
 
     any_failed = False
 
+    log_info_progress(f"Compiling [0/{len(compile_procs)}]")
+    compiles_finished = 0
+
     for command, p in compile_procs:
         code = p.wait()
         if code != 0:
             any_failed = True
-            error(f"compile command failed with code {code}")
-            error(f"  args: {command}")
+            log_info_progress_end()
+            log_error(f"compile command failed with code {code}")
+            log_error(f"  args: {command}")
             _, err = p.communicate()
             print(err.decode('utf-8'))
 
+        compiles_finished = compiles_finished + 1
+        log_info_progress(f"Compiling [{compiles_finished}/{len(compile_procs)}]")
+
+    log_info_progress_end()
+
     if any_failed:
-        error("Aborting link due to failed compilation")
+        log_error("Aborting link due to failed compilation")
         return
 
     link_command  = [compiler, "-fuse-ld=lld"]
     if args.verbose:
         link_command += ["-v"]
 
-    link_command += ["-g", "-O0", "-fno-omit-frame-pointer"]
-
-    link_command += [
-        "-Werror",
-        "-Wpedantic",
-        "-Wall",
-        ]
-
     link_command += ["-o", f"{build_root}/{exe_name}"]
+
+    link_command += compiler_warning_flags
+    link_command += build_mode_flags[build_mode]
 
     for l in links:
         link_command += [l]
@@ -213,15 +248,25 @@ def build():
     for l in path_links:
         link_command += [f"-l{l}"]
 
-    info("linking...")
+    log_info_progress("Linking   [0/1]")
+
+    if args.verbose:
+        log_info_progress_end()
+        log_debug(f"Linking [{exe_name}]: {link_command}")
 
     p = subprocess.Popen(args = link_command, executable = compiler_path, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
     code = p.wait()
     if code != 0:
-        error(f"link command failed with code {code}")
-        error(f"  args: {link_command}")
+        log_info_progress_end()
+        log_error(f"link command failed with code {code}")
+        log_error(f"  args: {link_command}")
         _, err = p.communicate()
         print(err.decode('utf-8'))
+    else:
+        log_info_progress("Linking   [1/1]")
+        log_info_progress_end()
+
+    log_info_progress_end()
 
 # -----------------------------------------------------------------------------
 

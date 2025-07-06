@@ -1,5 +1,6 @@
 CompileFlags:
     Remove: [-fmodules-ts, -fmodule-mapper=*, -fdeps-format=*]
+    Add: [-Wno-gnu-label-as-value, -Wno-c99-designator]
     CompilationDatabase: .build
 
 Diagnostics:
