@@ -4,33 +4,18 @@
 
 #include <lang/core.hpp>
 #include <lang/lang.hpp>
-#include <lang/interpret/interpret.hpp>
 
 #include <simdutf.h>
 
 NAMESPACE_USE(lang)
-
-std::string read_file(std::string_view path)
-{
-    std::ifstream in(std::filesystem::path(path), std::ios::in | std::ios::binary | std::ios::ate);
-    if(!in.is_open()) {
-        raise_error("failed to open file [{}]", path);
-    }
-    auto len = in.tellg();
-    in.seekg(0);
-    std::string message;
-    message.resize_and_overwrite(len, [&](char *data, usz size) {
-        in.read(data, size);
-        return size;
-    });
-    return message;
-}
 
 int main()
 {
     // auto message = "Hello, world!\n";
     // auto message = read_file("src/lang/scan.cpp");
     // auto message = read_file("/media/home/Dev/Data/sf-city-lots-json-master/citylots.json");
+    // auto message = read_file("test/small.lang");
+    // auto message = read_file("test/large.lang");
     // auto message = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃ";
     // auto message = read_file("test/test.lang");
 
@@ -50,7 +35,35 @@ int main()
     // auto message = read_file("test/vulkan_test.lang");
 
 #if 1
-    auto message = R"(
+    std::string_view message = R"(
+x := 1;
+while x < 10  {
+    x += 1;
+    if x % 2 == 0 {
+        x *= math.pi;
+        break foo;
+    } else {
+        continue;
+    }
+} else {
+    123
+}
+
+for 0..10 -> (x) {
+    print(x);
+} else { 0 }
+
+fib :: (n: f64) -> f64 {
+    defer { print("Hello, world!"); }
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+};
+
+++foo^.bar(1, 2, "3");
+)";
+#endif
+
+#if 0
+    std::string_view message = R"(
 
 #[[
 foo :: 2;
@@ -65,7 +78,6 @@ math.pi  :: 3.14;
 x :: 2;
 x + y;
 y :: 5;
-]]
 
 z :: 4;
 
@@ -73,8 +85,6 @@ z :: 4;
     x :: 2;
     x * { foo :: x; foo = foo + 2; foo } - z
 }
-
-#[[
 
 x :: 0;
 if x { 2 } else { 3 }
@@ -87,11 +97,16 @@ if x { 2 } else { 3 }
     }
 }
 ]]
+
+x := 1;
+while x < 10 {
+    x += 1
+}
     )";
 #endif
 
 #if 0
-    auto message = R"(
+    std::string_view message = R"(
 
 accumulate_tokens :: (input, fn) {
     tokens := ${};
@@ -144,7 +159,7 @@ gen_to_string_match :: (e, token_seq) {
 #endif
 
 #if 0
-    auto message = R"(
+    std::string_view message = R"(
 
 std   :: @package("std");
 mylib := @package("com.foobar.mylib");
@@ -195,6 +210,7 @@ x :: 123;
     auto tokens = scan(message);
     auto end = std::chrono::steady_clock::now();
 
+
 #if 0
     log_debug("token details");
 
@@ -231,7 +247,7 @@ x :: 123;
     }
 #endif
 
-#if 1
+#if 0
     log_debug("matched view");
 
     auto indent_str = "  ";
@@ -257,9 +273,31 @@ x :: 123;
     }
 #endif
 
-    log_debug("scanned in {:.4f}", std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count());
+    {
+        auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
+        auto size = tokens.tokens.size() * sizeof(Token);
+        log_debug("scanned in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
+        log_debug("tokenlist size = {} ({:.2f}x)", byte_size_to_string(size), f64(size) / message.size());
+    }
 
 #if 1
+    Constants constants;
+    start = std::chrono::steady_clock::now();
+    auto[ast, offset] = parse(tokens, constants);
+    end = std::chrono::steady_clock::now();
+
+    {
+        auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
+        log_debug("parsed in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
+    }
+
+    ast_print_details(constants, ast, offset, message);
+
+    // auto res = interpret(constants, ast);
+    // log_debug("res = {}", res);
+#endif
+
+#if 0
     start = std::chrono::steady_clock::now();
     auto fragments = parse(tokens);
     end = std::chrono::steady_clock::now();

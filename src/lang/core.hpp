@@ -5,6 +5,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <print>
+#include <chrono>
+#include <fstream>
+#include <filesystem>
 
 #include <string.h>
 
@@ -206,5 +209,120 @@ int take_fd(int& fd)
 
 #define decl_self_nullable(var) auto* self = get_impl(var)
 #define decl_self(var) decl_self_nullable(var); if (!self) raise_error("self: nullptr")
+
+// -----------------------------------------------------------------------------
+
+inline
+std::string read_file(std::string_view path)
+{
+    std::ifstream in(std::filesystem::path(path), std::ios::in | std::ios::binary | std::ios::ate);
+    if(!in.is_open()) {
+        raise_error("failed to open file [{}]", path);
+    }
+    auto len = in.tellg();
+    in.seekg(0);
+    std::string message;
+    message.resize_and_overwrite(len, [&](char *data, usz size) {
+        in.read(data, size);
+        return size;
+    });
+    return message;
+}
+
+// -----------------------------------------------------------------------------
+
+namespace detail {
+    inline
+    u32 decimals_for_3sf(f64 value)
+    {
+        if (value < 10) return 2;
+        if (value < 100) return 1;
+        return 0;
+    }
+
+    inline
+    std::string print_value_with_suffix(std::string_view suffix, f64 amount, u32 decimals)
+    {
+        switch (decimals) {
+            case 0: return std::format("{:.0f}{}", amount, suffix);
+            case 1: return std::format("{:.1f}{}", amount, suffix);
+            case 2: return std::format("{:.2f}{}", amount, suffix);
+            default: std::unreachable();
+        }
+    }
+}
+
+inline
+std::string duration_to_string(std::chrono::duration<f64, std::nano> dur)
+{
+	f64 nanos = dur.count();
+
+	if (nanos >= 1e9) {
+		f64 seconds = nanos / 1e9;
+		return detail::print_value_with_suffix("s", seconds, detail::decimals_for_3sf(seconds));
+	}
+
+	if (nanos >= 1e6) {
+		f64 millis = nanos / 1e6;
+		return detail::print_value_with_suffix("ms", millis, detail::decimals_for_3sf(millis));
+	}
+
+	if (nanos >= 1e3) {
+		f64 micros = nanos / 1e3;
+		return detail::print_value_with_suffix("us", micros, detail::decimals_for_3sf(micros));
+	}
+
+	if (nanos >= 0) {
+		return detail::print_value_with_suffix("ns", nanos, detail::decimals_for_3sf(nanos));
+	}
+
+	return "0";
+}
+
+inline
+std::string byte_size_to_string(u64 bytes)
+{
+	constexpr auto Exabyte   = usz(1) << 60;
+	if (bytes >= Exabyte) {
+		f64 exabytes = bytes / static_cast<f64>(Exabyte);
+		return detail::print_value_with_suffix("EiB", exabytes, detail::decimals_for_3sf(exabytes));
+	}
+
+	constexpr auto Petabyte  = usz(1) << 50;
+	if (bytes >= Petabyte) {
+		f64 petabytes = bytes / static_cast<f64>(Petabyte);
+		return detail::print_value_with_suffix("PiB", petabytes, detail::decimals_for_3sf(petabytes));
+	}
+
+	constexpr auto Terabyte  = usz(1) << 40;
+	if (bytes >= Terabyte) {
+		f64 terabytes = bytes / static_cast<f64>(Terabyte);
+		return detail::print_value_with_suffix("TiB", terabytes, detail::decimals_for_3sf(terabytes));
+	}
+
+	constexpr auto Gigabyte = usz(1) << 30;
+	if (bytes >= Gigabyte) {
+		f64 gigabytes = bytes / static_cast<f64>(Gigabyte);
+		return detail::print_value_with_suffix("GiB", gigabytes, detail::decimals_for_3sf(gigabytes));
+	}
+
+	constexpr auto Megabyte = usz(1) << 20;
+	if (bytes >= Megabyte) {
+		f64 megabytes = bytes / static_cast<f64>(Megabyte);
+		return detail::print_value_with_suffix("MiB", megabytes, detail::decimals_for_3sf(megabytes));
+	}
+
+	constexpr auto Kilobyte = usz(1) << 10;
+	if (bytes >= Kilobyte) {
+		f64 kilobytes = bytes / static_cast<f64>(Kilobyte);
+		return detail::print_value_with_suffix("KiB", kilobytes, detail::decimals_for_3sf(kilobytes));
+	}
+
+	if (bytes > 0) {
+		return std::format("{} byte{}", static_cast<f64>(bytes), bytes == 1 ? "" : "s");
+	}
+
+	return "0 bytes";
+}
 
 NAMESPACE_END

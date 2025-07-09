@@ -270,6 +270,17 @@ def build():
 
 # -----------------------------------------------------------------------------
 
+zstd_dir = git_source("zstd", "https://github.com/facebook/zstd.git", "dev")
+include(f"{zstd_dir}/lib")
+for d in [
+    "common",
+    "compress",
+]:
+    for s in glob.glob(f"{zstd_dir}/lib/{d}/*.c"):
+        source(s, external = True)
+
+# -----------------------------------------------------------------------------
+
 unordered_dense_dir = git_source("unordered_dense", "https://github.com/martinus/unordered_dense.git", "main")
 include(f"{unordered_dense_dir}/include")
 

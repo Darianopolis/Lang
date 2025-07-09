@@ -5,6 +5,11 @@
 #include <vector>
 #include <variant>
 #include <algorithm>
+#include <cstring>
+#include <any>
+
+#include <ankerl/unordered_dense.h>
+#include <zstd.h>
 
 NAMESPACE_BEGIN(lang)
 
@@ -141,7 +146,7 @@ struct RuntimeLangString
     X(Assign_ShiftLeft) X(Assign_ShiftRight) X(Assign_Xor) X(Assign_Bitwise_And) X(Assign_Bitwise_Or)
 
 #define OPS_ControlFlow \
-    X(Break) X(Return)
+    X(Break) X(Return) X(Continue) \
 
 #define OPS_All \
     OPS_Postfix \
@@ -216,6 +221,7 @@ constexpr Operator get_prefix_op(std::string_view op, ExpressionMode mode)
 {
     if (op == lang_str("break")) return Operator::Break;
     if (op == lang_str("return")) return Operator::Return;
+    if (op == lang_str("continue")) return Operator::Continue;
 
     switch (make_opstr(RuntimeLangString(op))) {
         case make_opstr("&"): return Operator::AddressOf;
@@ -492,484 +498,592 @@ TokenList scan(std::string_view);
 
 // -----------------------------------------------------------------------------
 
-#define NodeTypes \
-    X(VarDecl) \
-    X(Function) \
-    X(If) \
-    X(Return) \
-    X(For) \
-    X(While) \
-    X(Defer) \
-    X(Block) \
-    X(NamedReference) \
-    X(OpExpr) \
-    X(Call) \
-    X(CallNamedArgument) \
-    X(Literal) \
-    X(FieldAccess) \
-    X(Enum) \
-    X(EnumValue) \
-    X(Struct) \
-    X(Match) \
-    X(MatchArm) \
-    X(TokenSequence) \
-    X(TokenBasic) \
-    X(TokenValueLiteral) \
-    X(Splice) \
-    X(SpliceIdentifier) \
-
-enum class AstNodeType
+template<typename T>
+struct Dedup
 {
-#define X(v) v,
-NodeTypes
-#undef X
-};
+    ankerl::unordered_dense::map<T, u32> lookup;
+    std::vector<T> cache;
 
-constexpr
-std::string_view get_ast_node_type_name(AstNodeType t)
-{
-    switch (t) {
-#define X(v) case AstNodeType::v: return #v;
-NodeTypes
-#undef X
-    }
-}
+    usz total_lookups = 0;
 
-struct AstNode
-{
-    AstNodeType type;
-    AstNode* next{};
-};
-
-struct AstNodeList
-{
-    AstNode* head{};
-
-    usz count()
+    u32 get_id(T item)
     {
-        usz count = 0;
-        for (auto* node = head; node; node = node->next) {
-            count++;
-        }
-        return count;
-    }
-};
-
-struct AstNodeListBuilder
-{
-    AstNode* head = nullptr;
-    AstNode* tail = nullptr;
-
-    AstNodeListBuilder() = default;
-    AstNodeListBuilder(AstNodeList list)
-        : head(list.head)
-        , tail(list.head)
-    {
-        if (!tail) return;
-
-        while (tail->next) {
-            tail = tail->next;
-        }
-    }
-
-    void append(AstNode* to_append)
-    {
-        if (!to_append) return;
-
-        if (!head) {
-            head = tail = to_append;
+        total_lookups++;
+        auto iter = lookup.find(item);
+        if (iter == lookup.end()) {
+            auto index = cache.size();
+            cache.emplace_back(item);
+            lookup[item] = index;
+            return index;
         } else {
-            tail->next = to_append;
-            tail = tail->next;
+            return iter->second;
         }
     }
 
-    AstNodeList to_list() const
+    T from_id(u32 id)
     {
-        return { head };
+        return cache[id];
     }
 };
 
-struct AstVarDecl : AstNode
+struct Constants
 {
-    AstNode* target;
-    AstNode* type_expr{};
-    bool constant = true;
-    AstNode* init{};
+    Dedup<std::string_view> strings;
+    Dedup<f64> numbers;
 };
 
-struct AstFunction : AstNode
+// -----------------------------------------------------------------------------
+
+constexpr u32 AstHeader_Start = 0xFFFF'0000;
+
+#define AST_Headers(DO) \
+    DO(Literal_Number, = AstHeader_Start) \
+    DO(Literal_String) \
+    DO(Literal_True) \
+    DO(Literal_False) \
+    DO(Identifier) \
+    DO(VarDecl) \
+    DO(VarDecl_Type) \
+    DO(VarDecl_ConstInit) \
+    DO(VarDecl_MutableInit) \
+    DO(VarDecl_TypeConstInit) \
+    DO(VarDecl_TypeMutableInit) \
+    DO(While) \
+    DO(WhileElse) \
+    DO(For) \
+    DO(ForElse) \
+    DO(Block) \
+    DO(File) \
+    DO(If) \
+    DO(IfElse) \
+    DO(Function_Definition) \
+    DO(Function_Prototype) \
+    DO(Defer) \
+
+enum class AstHeader : u32
 {
-    AstNodeList parameters; // AstVarDecl[]
-    AstNode* return_type{};
-    AstNode* body{};
-};
-
-struct AstIf : AstNode
-{
-    AstNode* cond{};
-    AstNode* then_branch{};
-    AstNode* else_branch{};
-};
-
-struct AstReturn : AstNode
-{
-    AstNode* value{};
-};
-
-struct AstWhile : AstNode
-{
-    AstNode* cond{};
-    AstNode* body{};
-    AstNode* else_expr{};
-};
-
-struct AstFor : AstNode
-{
-    AstNode* range_expr;
-    AstNodeList parameters;
-    AstNode* body;
-    AstNode* else_expr{};
-};
-
-struct AstBlock : AstNode
-{
-    AstNodeList statements;
-    AstNode* terminal_expression{};
-};
-
-struct AstDefer : AstNode
-{
-    AstNode* body;
-};
-
-struct AstNamedReference : AstNode
-{
-    Token token;
-};
-
-struct AstEnumValue : AstNode
-{
-    Token identifier;
-    AstNode* init;
-};
-
-struct AstEnum : AstNode
-{
-    AstNode* type_expr;
-    AstNodeList values; // AstEnumValue[]
-};
-
-struct AstMatchArm : AstNode
-{
-    AstNode* pattern;
-    AstNode* body;
-};
-
-struct AstMatch : AstNode
-{
-    AstNode* expr;
-    AstNodeList arms; // AstMatchArm[]
-};
-
-struct AstStruct : AstNode
-{
-    AstNodeList body;
-};
-
-struct AstOpExpr : AstNode
-{
-    Token token;
-    Operator op;
-
-    AstNode* lhs{};
-    AstNode* rhs{};
-};
-
-struct AstCallNamedArgument : AstNode
-{
-    Token field;
-    AstNode* expr;
-};
-
-struct AstCall : AstNode
-{
-    AstNode* callee;
-    Token token;
-    AstNodeList arguments;
-};
-
-struct AstLiteral : AstNode
-{
-    Token token;
-};
-
-struct AstFieldAccess : AstNode
-{
-    AstNode* lhs;
-    Token field;
-};
-
-struct AstTokenSequence : AstNode
-{
-    // TODO: Lexical scope capture
-
-    AstNodeList tokens;
-};
-
-struct AstTokenBasic : AstNode
-{
-    Token token;
-};
-
-struct AstTokenValueLiteral : AstNode
-{
-    struct Value* value;
-};
-
-struct AstSplice : AstNode
-{
-    AstNode* expr;
-};
-
-struct AstSpliceIdentifier : AstNode
-{
-    AstNode* expr;
-};
-
-template<class Ret = void, class Fn>
-Ret visit(Fn&& fn, AstNode* expr)
-{
-    if (!expr) return Ret{};
-    switch (expr->type) {
-#define X(t) case AstNodeType::t: return fn(*static_cast<Ast##t*>(expr));
-NodeTypes
+#define AST_Headers_DECLARE(name, ...) name __VA_ARGS__,
+    AST_Headers(AST_Headers_DECLARE)
+#define X(name, ...) name,
+    OPS_Prefix
+    OPS_Postfix
+    OPS_Arithmetic
+    OPS_Bitwise
+    OPS_Logical
+    OPS_Comparison
+    OPS_Range
+    OPS_Assign
 #undef X
-    }
-}
-
-constexpr
-bool is_ast_node_block_expr(AstNode* t)
-{
-    if (!t) return false;
-    switch (t->type) {
-        case AstNodeType::If:
-        case AstNodeType::For:
-        case AstNodeType::While:
-        case AstNodeType::Defer:
-        case AstNodeType::Block:
-        case AstNodeType::Splice:
-            return true;
-        case AstNodeType::Function:
-            return static_cast<AstFunction*>(t)->body;
-        default:
-            return false;
-    }
-}
-
-AstNodeList parse(TokenList& tokens);
+#define X(name, ...) name, name##_Empty,
+    OPS_ControlFlow
+#undef X
+    End  = ~0u - 0,
+};
 
 inline
-void ast_debug_print(AstNode* root)
+AstHeader get_vardecl_header(bool constant, bool type, bool init)
 {
-    auto print_root = [&](this auto&& print_node, AstNode* _node, u32 depth) -> void {
-        auto print = [&]<class ...Args>(const std::format_string<Args...> fmt, Args&&...args) {
-            auto msg = std::format(fmt, std::forward<Args>(args)...);
-            log_debug("{}{}", indent_str(depth, ". "), msg);
-        };
+    if (init) {
+        if (type) {
+            return constant
+                ? AstHeader::VarDecl_TypeConstInit
+                : AstHeader::VarDecl_TypeMutableInit;
+        } else {
+            return constant
+                ? AstHeader::VarDecl_ConstInit
+                : AstHeader::VarDecl_MutableInit;
+        }
+    } else {
+        return type ? AstHeader::VarDecl_Type : AstHeader::VarDecl;
+    }
+}
 
-// #define HEADING_INDENT depth++
-// #define HEADING_PREFIX ""
+inline
+bool ast_vardecl_header_is_constant(AstHeader header)
+{
+    return header == AstHeader::VarDecl_ConstInit
+        || header == AstHeader::VarDecl_TypeConstInit;
+}
 
-#define HEADING_INDENT
-#define HEADING_PREFIX "."
+inline
+bool ast_vardecl_header_has_type(AstHeader header)
+{
+    return header == AstHeader::VarDecl_Type
+        || header == AstHeader::VarDecl_TypeConstInit
+        || header == AstHeader::VarDecl_TypeMutableInit;
+}
 
-        auto print_block_body = [&](const AstNode* body) {
-            auto& node = *static_cast<const AstBlock*>(body);
-            for (auto s = node.statements.head; s; s = s->next) {
-                print_node(s, depth + 1);
+inline
+bool ast_vardecl_header_has_init(AstHeader header)
+{
+    return header == AstHeader::VarDecl_ConstInit
+        || header == AstHeader::VarDecl_MutableInit
+        || header == AstHeader::VarDecl_TypeConstInit
+        || header == AstHeader::VarDecl_TypeMutableInit;
+}
+
+inline
+std::string_view get_ast_header_name(AstHeader header)
+{
+    switch (header)
+    {
+    #define AST_Headers_ToString(name, ...) case AstHeader::name : return #name;
+        AST_Headers(AST_Headers_ToString)
+    #define X(name, ...) case AstHeader::name: return #name;
+        OPS_Prefix
+        OPS_Postfix
+        OPS_Arithmetic
+        OPS_Bitwise
+        OPS_Logical
+        OPS_Comparison
+        OPS_Range
+        OPS_Assign
+    #undef X
+    #define X(name, ...) case AstHeader::name:     return #name; \
+                     case AstHeader::name##_Empty: return #name "_Empty";
+        OPS_ControlFlow
+    #undef X
+        case AstHeader::End: return "End";
+    }
+}
+
+struct AstOffset
+{
+    static constexpr u32 Invalid = ~0u;
+
+    u32 offset = Invalid;
+
+    operator bool() const noexcept
+    {
+        return offset != Invalid;
+    }
+};
+
+struct Ast
+{
+    std::vector<u32> code;
+
+    AstOffset offset()
+    {
+        return {u32(code.size())};
+    }
+
+    u32* pointer_to(AstOffset offset)
+    {
+        return code.data() + offset.offset;
+    }
+
+    AstOffset write(AstHeader header) {
+        auto _offset = offset();
+        code.emplace_back(std::to_underlying(header));
+        return _offset;
+    }
+
+    template<typename T>
+    void write(T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            u32 v = {};
+            std::memcpy(&v, &t, sizeof(T));
+            code.emplace_back(v);
+        } else {
+            static_assert(sizeof(T) % 4 == 0);
+            auto offset = code.size();
+            code.resize(offset + sizeof(T) / 4);
+            std::memcpy(code.data() + offset, &t, sizeof(T));
+        }
+    }
+
+    template<typename T>
+    void write_at(AstOffset offset, T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            std::memcpy(code.data() + offset.offset, &t, sizeof(T));
+        } else {
+            raise_error("TODO");
+        }
+    }
+
+    template<typename T>
+    void insert_at(AstOffset offset, T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            u32 v = {};
+            std::memcpy(&v, &t, sizeof(T));
+            code.insert(code.begin() + offset.offset, v);
+        } else {
+            raise_error("TODO");
+        }
+    }
+};
+
+struct AstListBuilder
+{
+    Ast* ast;
+    AstOffset first;
+    AstOffset last;
+
+    AstListBuilder(Ast& _ast): ast(&_ast) {}
+
+    void add(AstOffset entry)
+    {
+        if (last) ast->write_at(last, entry);
+        else first = entry;
+        last = entry;
+        ast->insert_at(last, AstOffset{});
+    }
+
+    AstOffset to_list()
+    {
+        return first;
+    }
+};
+
+struct ParseResult
+{
+    Ast ast;
+    AstOffset offset;
+};
+
+ParseResult parse(TokenList& tokens, Constants& constants);
+
+inline
+void ast_print_flat(Constants& constants, Ast& ast)
+{
+    u32 offset = 0;
+    for (auto v : ast.code) {
+        std::print("[{:3}] ", offset++);
+        if (v >= AstHeader_Start) {
+            std::println("{}", get_ast_header_name(AstHeader(v)));
+        } else {
+            std::println("{}", v);
+        }
+    }
+}
+
+inline
+void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted)
+{
+    auto compact_node = [&](this auto&& compact_node, AstOffset offset) -> void {
+        auto* ip = ast.pointer_to(offset);
+        auto compact_list = [&](u32* next) {
+            while (AstHeader{*next} != AstHeader::End) {
+                auto offset = AstOffset{*next};
+                next = ast.pointer_to(offset);
+                compact_node({offset.offset + 1});
             }
-            if (node.terminal_expression) {
-                print_node(node.terminal_expression, depth + 1);
-            }
+            compacted.write(AstOffset{});
         };
-
-        visit(overload_set {
-            [&](const AstVarDecl& node) {
-                print("Var_Decl(const = {})", node.constant);
-                print_node(node.target, depth + 1);
-                HEADING_INDENT;
-                if (node.type_expr) {
-                    print(HEADING_PREFIX "Type_Expr");
-                    print_node(node.type_expr, depth + 1);
+        auto header = AstHeader(*ip);
+        compacted.write(header);
+        switch (header) {
+            case AstHeader::File:
+            case AstHeader::Block:
+                compact_list(ip + 1);
+                break;
+            case AstHeader::Literal_Number:
+            case AstHeader::Literal_String:
+            case AstHeader::Identifier:
+                compacted.write(ip[1]);
+                break;
+            case AstHeader::FieldAccess:
+                compacted.write(ip[1]);
+                compact_node(AstOffset{ip[2]});
+                break;
+            case AstHeader::Dereference:
+            case AstHeader::Postincrement:
+            case AstHeader::Postdecrement:
+            case AstHeader::Break:
+            case AstHeader::Continue:
+            case AstHeader::Return:
+            #define X(name, ...) case AstHeader::name:
+                OPS_Prefix
+            #undef X
+                compact_node(AstOffset{ip[1]});
+                break;
+            #define X(name, ...) case AstHeader::name:
+                OPS_Arithmetic
+                OPS_Bitwise
+                OPS_Logical
+                OPS_Comparison
+                OPS_Range
+                OPS_Assign
+            #undef X
+                compact_node(AstOffset{ip[1]});
+                compact_node(AstOffset{ip[2]});
+                break;
+            case AstHeader::VarDecl:
+            case AstHeader::VarDecl_Type:
+            case AstHeader::VarDecl_ConstInit:
+            case AstHeader::VarDecl_MutableInit:
+            case AstHeader::VarDecl_TypeConstInit:
+            case AstHeader::VarDecl_TypeMutableInit:
+                compact_node(AstOffset{ip[1]});
+                ip += 2;
+                if (ast_vardecl_header_has_type(header)) {
+                    compact_node(AstOffset{*ip});
+                    ip += 1;
                 }
-                if (node.init) {
-                    print(HEADING_PREFIX "Init");
-                    print_node(node.init, depth + 1);
+                if (ast_vardecl_header_has_init(header)) {
+                    compact_node(AstOffset{*ip});
                 }
-            },
-            [&](const AstBlock& node) {
-                print("Block");
-                print_block_body(&node);
-            },
-            [&](const AstFunction& node) {
-                print("Function");
-                HEADING_INDENT;
-                if (node.parameters.head) {
-                    print(HEADING_PREFIX "Parameters");
-                    for (auto p = node.parameters.head; p; p = p->next) {
-                        print_node(p, depth + 1);
-                    }
+                break;
+            case AstHeader::Function_Definition:
+            case AstHeader::Function_Prototype:
+                compact_list(ip + 1);
+                compact_node(AstOffset{ip[2]});
+                if (header == AstHeader::Function_Definition) {
+                    compact_list(ip + 3);
                 }
-                if (node.return_type) {
-                    print(HEADING_PREFIX "Return_Type");
-                    print_node(node.return_type, depth + 1);
+                break;
+            case AstHeader::Defer:
+                compact_list(ip + 1);
+                break;
+            case AstHeader::Call:
+            case AstHeader::Subscript:
+                compact_node(AstOffset{ip[1]});
+                compact_list(ip + 2);
+                break;
+            case AstHeader::While:
+            case AstHeader::WhileElse:
+            case AstHeader::If:
+            case AstHeader::IfElse:
+                compact_node(AstOffset{ip[1]});
+                compact_list(ip + 2);
+                if (header == AstHeader::WhileElse || header == AstHeader::IfElse) {
+                    compact_list(ip + 3);
                 }
-                if (node.body) {
-                    print(HEADING_PREFIX "Body");
-                    print_block_body(node.body);
+                break;
+            case AstHeader::For:
+            case AstHeader::ForElse:
+                compact_node(AstOffset{ip[1]});
+                compact_list(ip + 2);
+                compact_list(ip + 3);
+                if (header == AstHeader::ForElse) {
+                    compact_list(ip + 4);
                 }
-            },
-            [&](const AstCall& node) {
-                if (node.token.raw == "(") {
-                    print("Call");
-                } else {
-                    print("Subscript");
-                }
-                HEADING_INDENT;
-                print_node(node.callee, depth + 1);
-                if (node.arguments.head) {
-                    print(HEADING_PREFIX "Args");
-                    for (auto arg = node.arguments.head; arg; arg = arg->next) {
-                        print_node(arg, depth + 1);
-                    }
-                }
-            },
-            [&](const AstCallNamedArgument& node) {
-                print("NamedArgument({})", node.field.raw);
-                print_node(node.expr, depth + 1);
-            },
-            [&](const AstLiteral& node) {
-                print("Literal({})", node.token.raw);
-            },
-            [&](const AstNamedReference& node) {
-                print("Named_Reference({})", node.token.raw);
-            },
-            [&](const AstEnumValue& node) {
-                print("EnumValue({})", node.identifier.raw);
-                if (node.init) {
-                    print_node(node.init, depth + 1);
-                }
-            },
-            [&](const AstEnum& node) {
-                print("Enum");
-                HEADING_INDENT;
-                if (node.type_expr) {
-                    print(HEADING_PREFIX "Type");
-                    print_node(node.type_expr, depth + 1);
-                }
-                if (node.values.head) {
-                    print(HEADING_PREFIX "Values");
-                    for (auto v = node.values.head; v; v = v->next) {
-                        print_node(v, depth + 1);
-                    }
-                }
-            },
-            [&](const AstStruct& node) {
-                print("Struct");
-                for (auto f = node.body.head; f; f = f->next) {
-                    print_node(f, depth + 1);
-                }
-            },
-            [&](const AstMatchArm& node) {
-                print("MatchArm");
-                print_node(node.pattern, depth + 1);
-                print_node(node.body, depth + 1);
-            },
-            [&](const AstMatch& node) {
-                print("Match");
-                print_node(node.expr, depth + 1);
-                for (auto a = node.arms.head; a; a = a->next) {
-                    print_node(a, depth + 1);
-                }
-            },
-            [&](const AstOpExpr& node) {
-                print("Operator({})", get_op_name(node.op));
-                if (node.lhs) print_node(node.lhs, depth + 1);
-                if (node.rhs) print_node(node.rhs, depth + 1);
-            },
-            [&](const AstFieldAccess& node) {
-                print("Field_Access({})", node.field.raw);
-                print_node(node.lhs, depth + 1);
-            },
-            [&](const AstIf& node) {
-                print("If");
-                HEADING_INDENT;
-                print(HEADING_PREFIX "Condition");
-                print_node(node.cond, depth + 1);
-                print(HEADING_PREFIX "Then");
-                print_block_body(node.then_branch);
-                if (node.else_branch) {
-                    print(HEADING_PREFIX "Else");
-                    print_block_body(node.else_branch);
-                }
-            },
-            [&](const AstFor& node) {
-                print("For");
-                HEADING_INDENT;
-                print(HEADING_PREFIX "Range_Expression");
-                print_node(node.range_expr, depth + 1);
-                print(HEADING_PREFIX "Parameters");
-                for (auto p = node.parameters.head; p; p = p->next) {
-                    print_node(p, depth + 1);
-                }
-                print(HEADING_PREFIX "Body");
-                print_block_body(node.body);
-                if (node.else_expr) {
-                    print(HEADING_PREFIX "Else");
-                    print_block_body(node.else_expr);
-                }
-            },
-            [&](const AstWhile& node) {
-                print("While");
-                HEADING_INDENT;
-                print(HEADING_PREFIX "Condition");
-                print_node(node.cond, depth + 1);
-                print(HEADING_PREFIX "Body");
-                print_block_body(node.body);
-                if (node.else_expr) {
-                    print(HEADING_PREFIX "Else");
-                    print_block_body(node.else_expr);
-                }
-            },
-            [&](const AstDefer& node) {
-                print("Defer");
-                print_block_body(node.body);
-            },
-            [&](const AstTokenSequence& node) {
-                print("TokenSequence");
-                for (auto t = node.tokens.head; t; t = t->next) {
-                    print_node(t, depth + 1);
-                }
-            },
-            [&](const AstTokenBasic& node) {
-                print("TokenBasic {}", node.token.raw);
-            },
-            [&](const AstSplice& node) {
-                print("Splice");
-                print_block_body(node.expr);
-            },
-            [&](const AstSpliceIdentifier& node) {
-                print("SpliceIdentifier");
-                print_block_body(node.expr);
-            },
-            [&](const auto& node) {
-                log_error("unknown node type: {} ({})", get_ast_node_type_name(node.type), std::to_underlying(node.type));
-            },
-        }, _node);
+                break;
+            default:
+                ;
+        }
     };
 
-    print_root(root, 0);
+    compact_node(offset);
+}
+
+inline
+void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
+{
+    auto print_node_root = [&](this auto&& print_node, AstOffset offset, u64 depth) -> void {
+
+        auto* ip = ast.pointer_to(offset);
+
+        // #define PRINT(...)
+        #define PRINT(fmt, ...) std::println("{}" fmt, indent_str(depth) __VA_OPT__(,) __VA_ARGS__)
+
+        auto print_list = [&](u32* next, auto depth) {
+            while (AstHeader{*next} != AstHeader::End) {
+                auto offset = AstOffset{*next};
+                next = ast.pointer_to(offset);
+                print_node({offset.offset + 1}, depth);
+            }
+            // compacted.write(AstOffset{});
+        };
+
+        auto header = AstHeader(*ip);
+        // compacted.write(header);
+        switch (header) {
+            case AstHeader::File:
+                print_list(ip + 1, depth);
+                break;
+            case AstHeader::Block:
+                PRINT("Block");
+                print_list(ip + 1, depth + 1);
+                break;
+            case AstHeader::Literal_Number:
+                PRINT("Literal_Number({})", constants.numbers.from_id(ip[1]));
+                // compacted.write(ip[1]);
+                break;
+            case AstHeader::Literal_String:
+                PRINT("Literal_String({})", constants.strings.from_id(ip[1]));
+                // compacted.write(ip[1]);
+                break;
+            case AstHeader::Literal_True:
+            case AstHeader::Literal_False:
+            case AstHeader::Break_Empty:
+            case AstHeader::Continue_Empty:
+            case AstHeader::Return_Empty:
+                PRINT("{}", get_ast_header_name(header));
+                break;
+            case AstHeader::FieldAccess:
+                PRINT("FieldAccess({})", constants.strings.from_id(ip[1]));
+                print_node(AstOffset{ip[2]}, depth + 1);
+                // compacted.write(ip[1]);
+                break;
+            case AstHeader::Identifier:
+                PRINT("Identifier({})", constants.strings.from_id(ip[1]));
+                // compacted.write(ip[1]);
+                break;
+// -----------------------------------------------------------------------------
+            case AstHeader::Dereference:
+            case AstHeader::Postincrement:
+            case AstHeader::Postdecrement:
+            case AstHeader::Break:
+            case AstHeader::Continue:
+            case AstHeader::Return:
+            #define X(name, ...) case AstHeader::name:
+                OPS_Prefix
+            #undef X
+                PRINT("{}", get_ast_header_name(header));
+                print_node(AstOffset{ip[1]}, depth + 1);
+                break;
+// -----------------------------------------------------------------------------
+            #define X(name, ...) case AstHeader::name:
+                OPS_Arithmetic
+                OPS_Bitwise
+                OPS_Logical
+                OPS_Comparison
+                OPS_Range
+                OPS_Assign
+            #undef X
+                PRINT("{}", get_ast_header_name(header));
+                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(AstOffset{ip[2]}, depth + 1);
+                break;
+// -----------------------------------------------------------------------------
+            case AstHeader::VarDecl:
+            case AstHeader::VarDecl_Type:
+            case AstHeader::VarDecl_ConstInit:
+            case AstHeader::VarDecl_MutableInit:
+            case AstHeader::VarDecl_TypeConstInit:
+            case AstHeader::VarDecl_TypeMutableInit:
+                PRINT("VarDecl");
+                print_node(AstOffset{ip[1]}, depth + 1);
+                ip += 2;
+                if (ast_vardecl_header_has_type(header)) {
+                    PRINT(".TypeExpr");
+                    print_node(AstOffset{*ip}, depth + 1);
+                    ip += 1;
+                }
+                if (ast_vardecl_header_has_init(header)) {
+                    PRINT(".{}", ast_vardecl_header_is_constant(header) ? "ConstInit" : "MutableInit");
+                    print_node(AstOffset{*ip}, depth + 1);
+                }
+                break;
+            case AstHeader::Function_Definition:
+            case AstHeader::Function_Prototype:
+                PRINT("{}", get_ast_header_name(header));
+                PRINT(".Params");
+                print_list(ip + 1, depth + 1);
+                PRINT(".ReturnType");
+                print_node(AstOffset{ip[2]}, depth + 1);
+                if (header == AstHeader::Function_Definition) {
+                    PRINT(".Body");
+                    print_list(ip + 3, depth + 1);
+                }
+                break;
+            case AstHeader::Defer:
+                PRINT("Defer");
+                print_list(ip + 1, depth + 1);
+                break;
+            case AstHeader::Call:
+            case AstHeader::Subscript:
+                PRINT("{}", get_ast_header_name(header));
+                print_node(AstOffset{ip[1]}, depth + 1);
+                PRINT(".Args");
+                print_list(ip + 2, depth + 1);
+                break;
+            case AstHeader::While:
+            case AstHeader::WhileElse:
+                PRINT("While");
+                print_node(AstOffset{ip[1]}, depth + 1);
+                PRINT(".Body");
+                print_list(ip + 2, depth + 1);
+                if (header == AstHeader::WhileElse) {
+                    PRINT(".Else");
+                    print_list(ip + 3, depth + 1);
+                }
+                break;
+            case AstHeader::For:
+            case AstHeader::ForElse:
+                PRINT("For");
+                print_node(AstOffset{ip[1]}, depth + 1);
+                PRINT(".Params");
+                print_list(ip + 2, depth + 1);
+                PRINT(".Body");
+                print_list(ip + 3, depth + 1);
+                if (header == AstHeader::ForElse) {
+                    PRINT(".Else");
+                    print_list(ip + 4, depth + 1);
+                }
+                break;
+            case AstHeader::If:
+            case AstHeader::IfElse:
+                PRINT("If");
+                print_node(AstOffset{ip[1]}, depth + 1);
+                PRINT(".Then");
+                print_list(ip + 2, depth + 1);
+                if (header == AstHeader::IfElse) {
+                    PRINT(".Else");
+                    print_list(ip + 3, depth + 1);
+                }
+                break;
+            default:
+                raise_error("unhandled ast header: {}", get_ast_header_name(header));
+        }
+
+        #undef PRINT
+    };
+
+    print_node_root(offset, 0);
+}
+
+// -----------------------------------------------------------------------------
+
+inline
+void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::string_view source)
+{
+    Ast compacted;
+    ast_compact(constants, ast, offset, compacted);
+
+#if 0
+    log_debug("Linked");
+    ast_print_flat(constants, ast);
+
+    log_debug("Compacted");
+    ast_print_flat(constants, compacted);
+#endif
+
+    log_debug("Tree");
+    ast_print_tree(constants, ast, offset);
+
+    static std::vector<std::byte> storage;
+    auto test_calculate_compressed_size = [&](const void* data, size_t size)
+    {
+        storage.resize(ZSTD_compressBound(size));
+        return ZSTD_compress(storage.data(), storage.size(), data, size, 0);
+    };
+
+    auto compress_size = test_calculate_compressed_size(source.data(), source.size());
+
+    log_debug("unique strings = {} / {} ({:.2f}x)", constants.strings.cache.size(), constants.strings.total_lookups, f64(constants.strings.total_lookups) / constants.strings.cache.size());
+    log_debug("unique numbers = {} / {} ({:.2f}x)", constants.numbers.cache.size(), constants.numbers.total_lookups, f64(constants.numbers.total_lookups) / constants.numbers.cache.size());
+
+    log_trace("            source = {}", byte_size_to_string(source.size()));
+    log_trace(" compressed source = {}", byte_size_to_string(compress_size));
+
+    auto comparison_size = source.size();
+
+    compress_size = test_calculate_compressed_size(compacted.code.data(), compacted.code.size() * 4);
+    log_trace("    compressed AST = {}", byte_size_to_string(compress_size));
+
+	log_debug(" ast size = {:9} ({:5.2f}x)",
+        byte_size_to_string(ast.code.size() * 4),
+        f64(ast.code.size() * 4) / comparison_size);
+
+    log_debug("compacted = {:9} ({:5.2f}x)",
+        byte_size_to_string(compacted.code.size() * 4),
+        f64(compacted.code.size() * 4) / comparison_size);
 }
 
 NAMESPACE_END
