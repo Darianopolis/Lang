@@ -769,7 +769,7 @@ struct Parser
             init = expression(Operator::VarDecl);
         }
 
-        auto offset = ast.write(get_vardecl_header(constant, type_expr, has_init));
+        auto offset = ast.write(get_vardecl_header(constant, bool(type_expr), has_init));
         ast.write(target);
         if (type_expr) ast.write(type_expr);
         if (has_init) ast.write(init);

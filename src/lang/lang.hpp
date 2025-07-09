@@ -651,11 +651,19 @@ struct AstOffset
 {
     static constexpr u32 Invalid = ~0u;
 
-    u32 offset = Invalid;
+    u32 value = Invalid;
 
-    operator bool() const noexcept
+    AstOffset() noexcept = default;
+    AstOffset(u32 bytecode_value) noexcept: value(bytecode_value) {}
+
+    explicit operator bool() const noexcept
     {
-        return offset != Invalid;
+        return value != Invalid;
+    }
+
+    AstOffset operator+(i32 delta) const noexcept
+    {
+        return {value + delta};
     }
 };
 
@@ -670,7 +678,7 @@ struct Ast
 
     u32* pointer_to(AstOffset offset)
     {
-        return code.data() + offset.offset;
+        return code.data() + offset.value;
     }
 
     AstOffset write(AstHeader header) {
@@ -698,7 +706,7 @@ struct Ast
     void write_at(AstOffset offset, T t)
     {
         if constexpr (sizeof(T) <= 4) {
-            std::memcpy(code.data() + offset.offset, &t, sizeof(T));
+            std::memcpy(code.data() + offset.value, &t, sizeof(T));
         } else {
             raise_error("TODO");
         }
@@ -710,7 +718,7 @@ struct Ast
         if constexpr (sizeof(T) <= 4) {
             u32 v = {};
             std::memcpy(&v, &t, sizeof(T));
-            code.insert(code.begin() + offset.offset, v);
+            code.insert(code.begin() + offset.value, v);
         } else {
             raise_error("TODO");
         }
@@ -765,12 +773,13 @@ inline
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted)
 {
     auto compact_node = [&](this auto&& compact_node, AstOffset offset) -> void {
+
         auto* ip = ast.pointer_to(offset);
-        auto compact_list = [&](u32* next) {
-            while (AstHeader{*next} != AstHeader::End) {
-                auto offset = AstOffset{*next};
-                next = ast.pointer_to(offset);
-                compact_node({offset.offset + 1});
+
+        auto compact_list = [&](AstOffset next) {
+            while (next) {
+                compact_node(next + 1);
+                next = *ast.pointer_to(AstOffset{next});
             }
             compacted.write(AstOffset{});
         };
@@ -779,7 +788,7 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
         switch (header) {
             case AstHeader::File:
             case AstHeader::Block:
-                compact_list(ip + 1);
+                compact_list(ip[1]);
                 break;
             case AstHeader::Literal_Number:
             case AstHeader::Literal_String:
@@ -788,7 +797,7 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
                 break;
             case AstHeader::FieldAccess:
                 compacted.write(ip[1]);
-                compact_node(AstOffset{ip[2]});
+                compact_node(ip[2]);
                 break;
             case AstHeader::Dereference:
             case AstHeader::Postincrement:
@@ -799,7 +808,7 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
             #define X(name, ...) case AstHeader::name:
                 OPS_Prefix
             #undef X
-                compact_node(AstOffset{ip[1]});
+                compact_node(ip[1]);
                 break;
             #define X(name, ...) case AstHeader::name:
                 OPS_Arithmetic
@@ -809,8 +818,8 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
                 OPS_Range
                 OPS_Assign
             #undef X
-                compact_node(AstOffset{ip[1]});
-                compact_node(AstOffset{ip[2]});
+                compact_node(ip[1]);
+                compact_node(ip[2]);
                 break;
             case AstHeader::VarDecl:
             case AstHeader::VarDecl_Type:
@@ -818,49 +827,49 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
             case AstHeader::VarDecl_MutableInit:
             case AstHeader::VarDecl_TypeConstInit:
             case AstHeader::VarDecl_TypeMutableInit:
-                compact_node(AstOffset{ip[1]});
+                compact_node(ip[1]);
                 ip += 2;
                 if (ast_vardecl_header_has_type(header)) {
-                    compact_node(AstOffset{*ip});
+                    compact_node(*ip);
                     ip += 1;
                 }
                 if (ast_vardecl_header_has_init(header)) {
-                    compact_node(AstOffset{*ip});
+                    compact_node(*ip);
                 }
                 break;
             case AstHeader::Function_Definition:
             case AstHeader::Function_Prototype:
-                compact_list(ip + 1);
-                compact_node(AstOffset{ip[2]});
+                compact_list(ip[1]);
+                compact_node(ip[2]);
                 if (header == AstHeader::Function_Definition) {
-                    compact_list(ip + 3);
+                    compact_list(ip[3]);
                 }
                 break;
             case AstHeader::Defer:
-                compact_list(ip + 1);
+                compact_list(ip[1]);
                 break;
             case AstHeader::Call:
             case AstHeader::Subscript:
-                compact_node(AstOffset{ip[1]});
-                compact_list(ip + 2);
+                compact_node(ip[1]);
+                compact_list(ip[2]);
                 break;
             case AstHeader::While:
             case AstHeader::WhileElse:
             case AstHeader::If:
             case AstHeader::IfElse:
-                compact_node(AstOffset{ip[1]});
-                compact_list(ip + 2);
+                compact_node(ip[1]);
+                compact_list(ip[2]);
                 if (header == AstHeader::WhileElse || header == AstHeader::IfElse) {
-                    compact_list(ip + 3);
+                    compact_list(ip[3]);
                 }
                 break;
             case AstHeader::For:
             case AstHeader::ForElse:
-                compact_node(AstOffset{ip[1]});
-                compact_list(ip + 2);
-                compact_list(ip + 3);
+                compact_node(ip[1]);
+                compact_list(ip[2]);
+                compact_list(ip[3]);
                 if (header == AstHeader::ForElse) {
-                    compact_list(ip + 4);
+                    compact_list(ip[4]);
                 }
                 break;
             default:
@@ -876,29 +885,30 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
 {
     auto print_node_root = [&](this auto&& print_node, AstOffset offset, u64 depth) -> void {
 
-        auto* ip = ast.pointer_to(offset);
+        u32* ip = ast.pointer_to(offset);
 
         // #define PRINT(...)
         #define PRINT(fmt, ...) std::println("{}" fmt, indent_str(depth) __VA_OPT__(,) __VA_ARGS__)
 
-        auto print_list = [&](u32* next, auto depth) {
-            while (AstHeader{*next} != AstHeader::End) {
-                auto offset = AstOffset{*next};
-                next = ast.pointer_to(offset);
-                print_node({offset.offset + 1}, depth);
+        auto print_list = [&](AstOffset next, auto depth) {
+
+            while (next) {
+                print_node(next + 1, depth);
+                next = *ast.pointer_to(next);
             }
             // compacted.write(AstOffset{});
         };
 
         auto header = AstHeader(*ip);
+
         // compacted.write(header);
         switch (header) {
             case AstHeader::File:
-                print_list(ip + 1, depth);
+                print_list(ip[1], depth);
                 break;
             case AstHeader::Block:
                 PRINT("Block");
-                print_list(ip + 1, depth + 1);
+                print_list(ip[1], depth + 1);
                 break;
             case AstHeader::Literal_Number:
                 PRINT("Literal_Number({})", constants.numbers.from_id(ip[1]));
@@ -917,7 +927,7 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
                 break;
             case AstHeader::FieldAccess:
                 PRINT("FieldAccess({})", constants.strings.from_id(ip[1]));
-                print_node(AstOffset{ip[2]}, depth + 1);
+                print_node(ip[2], depth + 1);
                 // compacted.write(ip[1]);
                 break;
             case AstHeader::Identifier:
@@ -935,7 +945,7 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
                 OPS_Prefix
             #undef X
                 PRINT("{}", get_ast_header_name(header));
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 break;
 // -----------------------------------------------------------------------------
             #define X(name, ...) case AstHeader::name:
@@ -947,8 +957,8 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
                 OPS_Assign
             #undef X
                 PRINT("{}", get_ast_header_name(header));
-                print_node(AstOffset{ip[1]}, depth + 1);
-                print_node(AstOffset{ip[2]}, depth + 1);
+                print_node(ip[1], depth + 1);
+                print_node(ip[2], depth + 1);
                 break;
 // -----------------------------------------------------------------------------
             case AstHeader::VarDecl:
@@ -958,74 +968,74 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
             case AstHeader::VarDecl_TypeConstInit:
             case AstHeader::VarDecl_TypeMutableInit:
                 PRINT("VarDecl");
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 ip += 2;
                 if (ast_vardecl_header_has_type(header)) {
                     PRINT(".TypeExpr");
-                    print_node(AstOffset{*ip}, depth + 1);
+                    print_node(*ip, depth + 1);
                     ip += 1;
                 }
                 if (ast_vardecl_header_has_init(header)) {
                     PRINT(".{}", ast_vardecl_header_is_constant(header) ? "ConstInit" : "MutableInit");
-                    print_node(AstOffset{*ip}, depth + 1);
+                    print_node(*ip, depth + 1);
                 }
                 break;
             case AstHeader::Function_Definition:
             case AstHeader::Function_Prototype:
                 PRINT("{}", get_ast_header_name(header));
                 PRINT(".Params");
-                print_list(ip + 1, depth + 1);
+                print_list(ip[1], depth + 1);
                 PRINT(".ReturnType");
-                print_node(AstOffset{ip[2]}, depth + 1);
+                print_node(ip[2], depth + 1);
                 if (header == AstHeader::Function_Definition) {
                     PRINT(".Body");
-                    print_list(ip + 3, depth + 1);
+                    print_list(ip[3], depth + 1);
                 }
                 break;
             case AstHeader::Defer:
                 PRINT("Defer");
-                print_list(ip + 1, depth + 1);
+                print_list(ip[1], depth + 1);
                 break;
             case AstHeader::Call:
             case AstHeader::Subscript:
                 PRINT("{}", get_ast_header_name(header));
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 PRINT(".Args");
-                print_list(ip + 2, depth + 1);
+                print_list(ip[2], depth + 1);
                 break;
             case AstHeader::While:
             case AstHeader::WhileElse:
                 PRINT("While");
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 PRINT(".Body");
-                print_list(ip + 2, depth + 1);
+                print_list(ip[2], depth + 1);
                 if (header == AstHeader::WhileElse) {
                     PRINT(".Else");
-                    print_list(ip + 3, depth + 1);
+                    print_list(ip[3], depth + 1);
                 }
                 break;
             case AstHeader::For:
             case AstHeader::ForElse:
                 PRINT("For");
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 PRINT(".Params");
-                print_list(ip + 2, depth + 1);
+                print_list(ip[2], depth + 1);
                 PRINT(".Body");
-                print_list(ip + 3, depth + 1);
+                print_list(ip[3], depth + 1);
                 if (header == AstHeader::ForElse) {
                     PRINT(".Else");
-                    print_list(ip + 4, depth + 1);
+                    print_list(ip[4], depth + 1);
                 }
                 break;
             case AstHeader::If:
             case AstHeader::IfElse:
                 PRINT("If");
-                print_node(AstOffset{ip[1]}, depth + 1);
+                print_node(ip[1], depth + 1);
                 PRINT(".Then");
-                print_list(ip + 2, depth + 1);
+                print_list(ip[2], depth + 1);
                 if (header == AstHeader::IfElse) {
                     PRINT(".Else");
-                    print_list(ip + 3, depth + 1);
+                    print_list(ip[3], depth + 1);
                 }
                 break;
             default:
@@ -1046,7 +1056,7 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
     Ast compacted;
     ast_compact(constants, ast, offset, compacted);
 
-#if 0
+#if 1
     log_debug("Linked");
     ast_print_flat(constants, ast);
 
