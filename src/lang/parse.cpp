@@ -177,7 +177,7 @@ struct Parser
 {
     Constants* constants;
     TokenIterator iter;
-    Ast ast;
+    Ast& ast;
 
 #if LANG_NOISY_PARSER
     i32 _depth = 0;
@@ -887,24 +887,6 @@ struct Parser
                     X(Postincrement)
                     X(Postdecrement)
                 #undef X
-                    // case Operator::Dereference: {
-                    //     auto new_lhs = ast.write(AstHeader::Dereference);
-                    //     ast.write(lhs);
-                    //     lhs = new_lhs;
-                    //     break;
-                    // }
-                    // case Operator::Postincrement: {
-                    //     auto new_lhs = ast.write(AstHeader::Postincrement);
-                    //     ast.write(lhs);
-                    //     lhs = new_lhs;
-                    //     break;
-                    // }
-                    // case Operator::Postdecrement: {
-                    //     auto new_lhs = ast.write(AstHeader::Postdecrement);
-                    //     ast.write(lhs);
-                    //     lhs = new_lhs;
-                    //     break;
-                    // }
                     default:
                         raise_error("TODO");
                 }
@@ -936,11 +918,11 @@ struct Parser
     }
 };
 
-ParseResult parse(TokenList& tokens, Constants& constants)
+AstOffset parse(Ast& out, TokenList& tokens, Constants& constants)
 {
-    Parser parser { &constants, tokens.begin() };
+    Parser parser { &constants, tokens.begin(), out };
     auto offset = parser.file();
-    return {std::move(parser.ast), offset};
+    return offset;
 }
 
 NAMESPACE_END

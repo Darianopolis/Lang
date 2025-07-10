@@ -327,6 +327,10 @@ for s in glob.glob("src/**/*.cpp", recursive = True):
     source(s, external = False)
 include("src")
 
+for s in glob.glob("test/**/*.cpp", recursive = True):
+    source(s, external = False)
+include("test")
+
 # -----------------------------------------------------------------------------
 
 build()

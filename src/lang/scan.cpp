@@ -8,8 +8,9 @@ NAMESPACE_USE(lang)
 
 NAMESPACE_BEGIN()
 
+// TODO: Carriage Return
 #define LANG_WHITESPACE_CASES \
-    case ' ': case '\n': case '\r': case '\t'
+    case ' ': case '\n': case '\t'
 
 #define LANG_DECIMAL_DIGIT_CASES \
     case '0': case '1': case '2': case '3': case '4': \
@@ -222,8 +223,8 @@ struct ScanState
                     case '=':         position++; type = punc(">="); break;
                     case '>':
                         switch (source[++position]) {
-                            case '=': position++; type = punc(">="); break;
-                            default:              type = punc(">");  break;
+                            case '=': position++; type = punc(">>="); break;
+                            default:              type = punc(">>");  break;
                         }
                         break;
                     default:                      type = punc(">");  break;
@@ -241,7 +242,7 @@ struct ScanState
                 }
                 break;
             case '$':
-                if (source[position++] != '{') raise_error("expected '{{' following $");
+                if (source[position++] != '{') raise_error("expected '{{' following '$'");
                 type = punc("${");
                 break;
             case '\\':
@@ -355,7 +356,7 @@ struct ScanState
             case '"': // This will result in syntax errors but we postpone this to parsing for better context
                 break;
             default:
-                raise_error("number literal must be followed by operator, comment, or whitespace; got {}", peek());
+                raise_error("number literal must be followed by operator, comment, or whitespace; got '{}'", char(peek()));
         }
 
         auto end = position;
@@ -412,7 +413,10 @@ struct ScanState
             case 'o': if (ident.substr(1) == "r")    type = keyword("or");    break;
             // pq
             case 'r': if (ident.substr(1) == "eturn")    type = keyword("return"); break;
-            case 's': if (ident.substr(1) == "lse")      type = keyword("else");   break;
+            case 's':
+                if      (ident.substr(1) == "lse")   type = keyword("else");
+                else if (ident.substr(1) == "truct") type = keyword("struct");
+                break;
             case 't':
                 if      (ident.substr(1) == "rue")   type = keyword("true");
                 else if (ident.substr(1) == "ypeOf") type = keyword("@typeOf");
@@ -576,6 +580,7 @@ void lang::scan(TokenList& out, Constants& constants, std::string_view source)
                 switch (scanner.token.type) {
                     case punc("}"):
                         if (begin_token_type != punc("{")
+                                && begin_token_type != punc("${")
                                 && begin_token_type != punc("\\{")
                                 && begin_token_type != punc("\\id{"))
                             raise_error("mismatched pair - found unexpected closing '}}'");

@@ -3,8 +3,7 @@ build/
 .cache/
 .vscode/
 
-test/large.lang
-test/small.lang
+test/resources/
 
 perf.data
 perf.data.old

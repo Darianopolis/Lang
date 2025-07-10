@@ -9,7 +9,7 @@
 
 NAMESPACE_USE(lang)
 
-int main()
+void samples()
 {
     // auto message = read_file("test/small.lang");
     // auto message = read_file("test/large.lang");
@@ -245,7 +245,8 @@ x :: 123;
 
 #if 1
     start = std::chrono::steady_clock::now();
-    auto[ast, offset] = parse(tokens, constants);
+    Ast ast;
+    auto offset = parse(ast, tokens, constants);
     end = std::chrono::steady_clock::now();
 
     {

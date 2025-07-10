@@ -73,33 +73,70 @@ struct Defer
 #define text_ansi_color_reset "\u001B[0m"
 #define text_ansi_color(color, text) text_ansi_color_begin(color) text text_ansi_color_reset
 
+enum class LogLevel
+{
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+};
+
+inline
+LogLevel log_level = LogLevel::Trace;
+
+struct LogLevelGuard
+{
+    LogLevel old_level;
+
+    LogLevelGuard(LogLevel new_level)
+        : old_level(log_level)
+    {
+        log_level = new_level;
+    }
+
+    ~LogLevelGuard()
+    {
+        log_level = old_level;
+    }
+
+    LogLevelGuard(const LogLevelGuard&) = delete;
+    LogLevelGuard(LogLevelGuard&&) = delete;
+};
+
 template<typename ...Args>
 void log_trace(std::format_string<Args...> fmt, Args&&... args)
 {
+    if (log_level > LogLevel::Trace) return;
     std::println("[" text_ansi_color(90, "TRACE") "] " text_ansi_color(90, "{}"), std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_debug(std::format_string<Args...> fmt, Args&&... args)
 {
+    if (log_level > LogLevel::Debug) return;
     std::println("[" text_ansi_color(96, "DEBUG") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_info(std::format_string<Args...> fmt, Args&&... args)
 {
+    if (log_level > LogLevel::Info) return;
     std::println(" [" text_ansi_color(94, "INFO") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_warn(std::format_string<Args...> fmt, Args&&... args)
 {
+    if (log_level > LogLevel::Warn) return;
     std::println(" [" text_ansi_color(93, "WARN") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_error(std::format_string<Args...> fmt, Args&&... args)
 {
+    if (log_level > LogLevel::Error) return;
     std::println("[" text_ansi_color(91, "ERROR") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 

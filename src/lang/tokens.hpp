@@ -22,6 +22,13 @@ struct Dedup
 
     usz total_lookups = 0;
 
+    void clear()
+    {
+        total_lookups = 0;
+        lookup.clear();
+        cache.clear();
+    }
+
     usz unique_count()
     {
         return cache.size();
@@ -40,7 +47,8 @@ struct Dedup
 
     T from_id(u32 id)
     {
-        return cache[id - 1];
+        auto value = cache[id - 1];
+        return value;
     }
 };
 
@@ -49,6 +57,13 @@ struct Constants
     Dedup<std::string_view> identifiers;
     Dedup<std::string_view> strings;
     Dedup<std::string_view> numbers;
+
+    void clear()
+    {
+        identifiers.clear();
+        strings.clear();
+        numbers.clear();
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -172,7 +187,7 @@ std::string_view get_token_type_name(TokenType type)
     }
 }
 
-consteval TokenType keyword(std::string_view str)
+constexpr TokenType keyword_runtime(std::string_view str)
 {
     for (usz i = 0; i < Keywords.size(); ++i) {
         if (Keywords[i] == str) {
@@ -182,14 +197,24 @@ consteval TokenType keyword(std::string_view str)
     raise_error("Expected valid keyword, got '{}'", str);
 }
 
-consteval TokenType punc(std::string_view str)
+consteval TokenType keyword(std::string_view str)
+{
+    return keyword_runtime(str);
+}
+
+constexpr TokenType punc_runtime(std::string_view str)
 {
     for (usz i = 0; i < PunctuationSequences.size(); ++i) {
         if (PunctuationSequences[i] == str) {
             return TokenType(std::to_underlying(TokenTypes::Punc_First) + i);
         }
     }
-    raise_error("Expected valid keyword, got '{}'", str);
+    raise_error("Expected valid punctuation, got '{}'", str);
+}
+
+consteval TokenType punc(std::string_view str)
+{
+    return punc_runtime(str);
 }
 
 // TODO: use unique AST nodes for undefined/nodes instead of identifiers
@@ -222,6 +247,25 @@ struct Token
 };
 
 inline
+bool token_has_value(TokenType type)
+{
+    switch (type) {
+        case TokenTypes::Identifier:
+        case TokenTypes::String:
+        case TokenTypes::Number:
+        case punc("["):
+        case punc("("):
+        case punc("{"):
+        case punc("${"):
+        case punc("\\{"):
+        case punc("\\id{"):
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline
 std::string token_to_string(Constants& constants, Token token)
 {
     switch (token.type) {
@@ -236,7 +280,11 @@ std::string token_to_string(Constants& constants, Token token)
         case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
             return std::format("Keyword({})", get_keyword_str(token.type));
         case TokenTypes::Punc_First...TokenTypes::Punc_Last:
-            return std::format("Punc({})", get_punc_str(token.type));
+            if (token_has_value(token.type)) {
+                return std::format("Punc({}, {})", get_punc_str(token.type), token.value);
+            } else {
+                return std::format("Punc({})", get_punc_str(token.type));
+            }
         default:
             raise_error("invalid token type ({})", std::to_underlying(token.type));
     }
@@ -245,23 +293,6 @@ std::string token_to_string(Constants& constants, Token token)
 constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
 constexpr auto EofToken = Token { .type = TokenTypes::Eof };
 
-inline
-bool token_has_value(TokenType type)
-{
-    switch (type) {
-        case TokenTypes::Identifier:
-        case TokenTypes::String:
-        case TokenTypes::Number:
-        case punc("["):
-        case punc("("):
-        case punc("{"):
-        case punc("\\{"):
-        case punc("\\id{"):
-            return true;
-        default:
-            return false;
-    }
-}
 
 struct TokenList
 {

@@ -220,13 +220,7 @@ struct AstListBuilder
     }
 };
 
-struct ParseResult
-{
-    Ast ast;
-    AstOffset offset;
-};
-
-ParseResult parse(TokenList& tokens, Constants& constants);
+AstOffset parse(Ast& out, TokenList& tokens, Constants& constants);
 
 void ast_print_flat(Constants& constants, Ast& ast);
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);
