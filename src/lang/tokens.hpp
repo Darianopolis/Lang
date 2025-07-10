@@ -183,7 +183,7 @@ std::string_view get_token_type_name(TokenType type)
         case TokenTypes::Punc_First...TokenTypes::Punc_Last:
             return get_punc_str(type);
         default:
-            raise_error("");
+            raise_error("invalid token type: {}", std::to_underlying(type));
     }
 }
 
@@ -293,11 +293,48 @@ std::string token_to_string(Constants& constants, Token token)
 constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
 constexpr auto EofToken = Token { .type = TokenTypes::Eof };
 
+struct Line
+{
+    // u32 file_offset = 0;
+    u32 first_token_file_offset = 0;
+    u32 first_token = InvalidTokenIndex;
+};
+
+struct Error
+{
+    u32 line;
+    u32 file_offset;
+    std::string message;
+};
+
+struct ErrorList
+{
+    std::vector<Error> errors;
+
+    void clear()
+    {
+        errors.clear();
+    }
+
+    bool any_errors() const
+    {
+        return !errors.empty();
+    }
+
+    void print_errors(Constants& constants, struct TokenList& token_list, std::string_view source);
+};
 
 struct TokenList
 {
     Constants* constants;
     std::vector<u32> tokens;
+    std::vector<Line> lines;
+
+    void clear()
+    {
+        tokens.clear();
+        lines.clear();
+    }
 
     usz size_in_bytes()
     {
@@ -319,6 +356,28 @@ struct TokenList
     struct TokenIterator begin() const;
 
     TokenIterator matching_pair_for(Token token) const;
+
+    u32 find_line_for_pos(u32 pos)
+    {
+        // TODO: Binary search
+        for (usz i = lines.size(); i--;) {
+            if (lines[i].first_token_file_offset <= pos) {
+                return i;
+            }
+        }
+        raise_error("impossible");
+    }
+
+    u32 find_line_for_token(u32 token_index)
+    {
+        // TODO: Binary search
+        for (usz i = lines.size(); i--;) {
+            if (lines[i].first_token <= token_index) {
+                return i;
+            }
+        }
+        raise_error("impossible");
+    }
 };
 
 #define LANG_NOISY_TOKEN_ITERATOR 0
@@ -431,7 +490,7 @@ constexpr bool is_end_of_expression_token(Token token)
     }
 }
 
-void scan(TokenList& out, Constants& constants, std::string_view source);
+void scan(TokenList& out, Constants& constants, ErrorList& errors, std::string_view source);
 
 // -----------------------------------------------------------------------------
 //     Operators
@@ -500,6 +559,8 @@ std::string_view get_op_name(Operator op)
 #define X(o, ...) case Operator::o: return #o;
         OPS_All
 #undef X
+        default:
+            raise_error("unrecognized op: {}", std::to_underlying(op));
     }
 }
 

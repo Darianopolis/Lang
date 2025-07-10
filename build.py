@@ -116,7 +116,7 @@ links = []
 path_links = []
 
 compiler_warning_flags = [
-    "-Wpedantic",
+    # "-Wpedantic",
     "-Wall",
 
     "-Wno-missing-field-initializers",
@@ -126,6 +126,8 @@ compiler_warning_flags = [
     "-Wno-deprecated-declarations",
     "-Wno-unused-function",
     "-Wno-nested-anon-types",
+    "-Wno-unused-variable",
+    "-Wno-unused-but-set-variable",
 
     "-Wno-gnu-label-as-value",
     "-Wno-c99-designator",
@@ -175,7 +177,8 @@ def build():
     global links
 
     compile_procs = []
-    compiler = "clang++"
+    # compiler = "clang++"
+    compiler = "g++"
 
     compiler_path = shutil.which("ccache")
 
@@ -291,14 +294,14 @@ include(f"{dyncall_dir}")
 
 # -----------------------------------------------------------------------------
 
-zstd_dir = git_source("zstd", "https://github.com/facebook/zstd.git", "dev")
-include(f"{zstd_dir}/lib")
-for d in [
-    "common",
-    "compress",
-]:
-    for s in glob.glob(f"{zstd_dir}/lib/{d}/*.c"):
-        source(s, external = True)
+# zstd_dir = git_source("zstd", "https://github.com/facebook/zstd.git", "dev")
+# include(f"{zstd_dir}/lib")
+# for d in [
+#     "common",
+#     "compress",
+# ]:
+#     for s in glob.glob(f"{zstd_dir}/lib/{d}/*.c"):
+#         source(s, external = True)
 
 # -----------------------------------------------------------------------------
 

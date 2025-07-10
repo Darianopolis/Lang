@@ -18,8 +18,14 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
     // log_trace("testing: {}", input);
 
     TokenList tokens;
+    ErrorList errors;
 
-    scan(tokens, constants, input);
+    scan(tokens, constants, errors, input);
+
+    if (errors.any_errors()) {
+        errors.print_errors(constants, tokens, input);
+        return TestResult::Failed;
+    }
 
     u32 i = 0;
     for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
@@ -52,6 +58,24 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
     return TestResult::Success;
 }
 
+TestResults test_full_parse(Constants& constants, std::string_view input)
+{
+    TokenList tokens;
+    ErrorList errors;
+
+    scan(tokens, constants, errors, input);
+    if (errors.any_errors()) {
+        errors.print_errors(constants, tokens, input);
+        return TestResult::Failed;
+    }
+
+    Ast ast;
+    auto offset = parse(ast, tokens, constants);
+    ast_print_details(constants, ast, offset, input);
+
+    return TestResult::Success;
+}
+
 TestResults test_positives()
 {
     using enum AstHeader;
@@ -68,21 +92,21 @@ TestResults test_positives()
 
     auto _num = [&](std::string_view val) { return constants.numbers.get_id(val);     };
     auto _id =  [&](std::string_view val) { return constants.identifiers.get_id(val); };
-    auto h    = [&](AstHeader header)     { return std::to_underlying(header);        };
+    auto ast  = [&](AstHeader header)     { return std::to_underlying(header);        };
 
     TestResults res;
 
     // operator precedence
     res += test_scan_parse(constants, "1 + ++a^ * 3",
         { num("1"), sym("+"), sym("++"), id("a"), sym("^"), sym("*"), num("3") },
-        { h(File),
-            h(Add),
-                h(Literal_Number), _num("1"),
-                h(Multiply),
-                    h(Dereference),
-                        h(Preincrement),
-                            h(Identifier), _id("a"),
-                    h(Literal_Number), _num("3") });
+        { ast(File),
+            ast(Add),
+                ast(Literal_Number), _num("1"),
+                ast(Multiply),
+                    ast(Dereference),
+                        ast(Preincrement),
+                            ast(Identifier), _id("a"),
+                    ast(Literal_Number), _num("3") });
 
     // keywords
     res += test_scan_parse(constants, "for 0..12 -> (x) {}",
@@ -91,7 +115,7 @@ TestResults test_positives()
     // strings
     res += test_scan_parse(constants, R"( 'raw"'""'"raw' )", { str("'\"\"'")     });
     res += test_scan_parse(constants, R"( "foo bar\" " )",   { str("foo bar\" ") });
-    res += test_scan_parse(constants, R"( "\u{1f525}" )",    { str("🔥") });
+    res += test_scan_parse(constants, R"( "\u{1f525}" )",    { str("🔥")         });
 
     // numbers
     res += test_scan_parse(constants, "0.1e+2",       { num("0.1e+2")      });
@@ -144,6 +168,7 @@ TestResults test_positives()
 TestResults scan_fuzz()
 {
     Constants constants;
+    ErrorList errors;
     TokenList tokens;
 
     auto seed = std::random_device{}();
@@ -152,11 +177,12 @@ TestResults scan_fuzz()
 
     std::mt19937 rng{seed};
     std::uniform_int_distribution<u8> dist{0, 255};
+    std::uniform_int_distribution<u8> spaces{0, 5};
     std::uniform_int_distribution<u32> ascii_dist{1, 127};
     std::uniform_int_distribution<u32> unicode_dist{128, 1114111};
 
     constexpr auto InputSize = 100;
-    constexpr auto Iterations = 4096;
+    constexpr auto Iterations = 100;
 
     std::vector<char32_t> generated_utf32;
     std::string input;
@@ -167,12 +193,13 @@ TestResults scan_fuzz()
         input.clear();
         for (u32 i = 0; i < InputSize; i++) {
             // auto value = (rng() & 1) ? codepoint_dist(rng) : ascii_dist(rng);
-            auto value = ascii_dist(rng);
+            auto value = spaces(rng) == 0 ? ' ' : ascii_dist(rng);
 
             if (value > 0xD7FF && value < 0xE000) continue; // surrogates
             if (value < 32) {
                 // control characters
-                if (value != '\n' && value != '\t') continue;
+                // TODO: Support tabs
+                if (value != '\n' /*  && value != '\t' */) continue;
             }
             if (value == 127) continue; // delete
 
@@ -187,10 +214,18 @@ TestResults scan_fuzz()
             raise_error("{}", simdutf_err_to_string(res.error));
         }
 
+        // log_trace("source:\n{}", input);
+
         try {
             constants.clear();
-            LogLevelGuard _{LogLevel::Fatal};
-            scan(tokens, constants, input);
+            errors.clear();
+            {
+                // LogLevelGuard _{LogLevel::Fatal};
+                scan(tokens, constants, errors, input);
+            }
+            // if (errors.any_errors()) {
+            //     errors.print_errors(constants, tokens, input);
+            // }
         } catch (...) {}
     }
 

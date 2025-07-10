@@ -201,9 +201,10 @@ x :: 123;
     TokenList tokens;
     tokens.tokens.reserve(message.size());
     Constants constants;
+    ErrorList errors;
 
     auto start = std::chrono::steady_clock::now();
-    scan(tokens, constants, message);
+    scan(tokens, constants, errors, message);
     auto end = std::chrono::steady_clock::now();
 
 #if 1

@@ -1,6 +1,6 @@
 #include "ast.hpp"
 
-#include <zstd.h>
+// #include <zstd.h>
 
 NAMESPACE_BEGIN(lang)
 
@@ -317,8 +317,10 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
     static std::vector<std::byte> storage;
     auto test_calculate_compressed_size = [&](const void* data, size_t size)
     {
-        storage.resize(ZSTD_compressBound(size));
-        return ZSTD_compress(storage.data(), storage.size(), data, size, 0);
+        // storage.resize(ZSTD_compressBound(size));
+        // return ZSTD_compress(storage.data(), storage.size(), data, size, 0);
+        // TODO
+        return size;
     };
 
     auto compress_size = test_calculate_compressed_size(source.data(), source.size());

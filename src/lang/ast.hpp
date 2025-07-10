@@ -117,6 +117,7 @@ std::string_view get_ast_header_name(AstHeader header)
         OPS_ControlFlow
     #undef X
         case AstHeader::End: return "End";
+        default: raise_error("unknown header: {}", std::to_underlying(header));
     }
 }
 

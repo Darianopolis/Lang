@@ -160,7 +160,8 @@ void raise_error(std::format_string<Args...> fmt, Args&&... args)
 {
     auto message = std::vformat(fmt.get(), std::make_format_args(args...));
     log_error("{}", message);
-    throw std::runtime_error(message);
+    std::terminate();
+    // throw std::runtime_error(message);
 }
 
 [[noreturn]]
