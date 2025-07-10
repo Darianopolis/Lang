@@ -5,3 +5,6 @@ build/
 
 test/large.lang
 test/small.lang
+
+perf.data
+perf.data.old

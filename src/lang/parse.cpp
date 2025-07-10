@@ -80,7 +80,7 @@ auto OperatorOrdering = []{
         }
     };
 
-#define X(i) i,
+#define X(i, ...) i,
 
     // General operator strata
 
@@ -183,30 +183,30 @@ struct Parser
     i32 _depth = 0;
 #endif
 
-    bool is(StaticLangString raw)
+    bool is(TokenType type)
     {
-        return iter.peek().raw == raw.str;
+        return iter.peek().type == type;
     }
 
-    bool match(StaticLangString raw)
+    bool match(TokenType type)
     {
-        if (iter.peek().raw == raw.str) {
+        if (is(type)) {
             iter.advance();
             return true;
         }
         return false;
     }
 
-    void consume(StaticLangString raw, std::string_view message)
+    void consume(TokenType type, std::string_view message)
     {
-        if (iter.peek().raw != raw.str) raise_error("{}, got {}", message, iter.peek().raw);
-        iter.advance();
+        auto token = iter.advance();
+        if (token.type != type) raise_error("{}, got {}", message, get_token_type_name(token.type));
     }
 
     Token consume_identifier(std::string_view message)
     {
         auto token = iter.advance();
-        if (token.type != TokenType::Identifier) raise_error("{}, got {}", message, token.raw);
+        if (!token_type_is_identifier_like(token.type)) raise_error("{}, got {}", message, get_token_type_name(token.type));
         return token;
     }
 
@@ -216,8 +216,8 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (match("else")) {
-            if (match("{")) {
+        if (match(keyword("else"))) {
+            if (match(punc("{"))) {
                 return finish_block_contents();
             } else {
                 AstListBuilder builder{ast};
@@ -234,7 +234,7 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         auto expr = expression();
-        consume("{", "expected '{' after if conditional");
+        consume(punc("{"), "expected '{' after if conditional");
         auto then_branch = finish_block_contents();
         auto else_branch = maybe_else();
 
@@ -254,13 +254,13 @@ struct Parser
 
         auto range_expr = expression();
 
-        consume("->", "expected '->' after for range expression");
+        consume(punc("->"), "expected '->' after for range expression");
 
-        consume("(", "expected parameter list in for");
-        auto params = parameters(')');
-        consume(")", "expected ')' to follow parameter list");
+        consume(punc("("), "expected parameter list in for");
+        auto params = parameters(punc(")"));
+        consume(punc(")"), "expected ')' to follow parameter list");
 
-        consume("{", "expected '{' to follow parameter list");
+        consume(punc("{"), "expected '{' to follow parameter list");
         auto body = finish_block_contents();
 
         auto else_expr = maybe_else();
@@ -281,7 +281,7 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         auto cond = expression();
-        consume("{", "expected '{' after while condition");
+        consume(punc("{"), "expected '{' after while condition");
         auto body = finish_block_contents();
         auto else_expr = maybe_else();
 
@@ -295,21 +295,21 @@ struct Parser
         return offset;
     }
 
+#define PARSE_MaybeBlockExpr \
+    case keyword("if"):    iter.advance(); return finish_if(); \
+    case keyword("for"):   iter.advance(); return finish_for(); \
+    case keyword("while"): iter.advance(); return finish_while(); \
+    case punc("{"):        iter.advance(); return finish_block(); \
+    case punc("\\{"): \
+        raise_error("TODO"); \
+        // return splice();
+
     AstOffset maybe_block_expr()
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (match("if")) {
-            return finish_if();
-        } else if (match("for")) {
-            return finish_for();
-        } else if (match("while")) {
-            return finish_while();
-        } else if (match("{")) {
-            return finish_block();
-        } else if (is("\\{")) {
-            raise_error("TODO");
-            // return splice();
+        switch (iter.peek().type) {
+            PARSE_MaybeBlockExpr
         }
 
         return {};
@@ -320,7 +320,7 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         auto expr = maybe_block_expr();
-        if (!expr) raise_error("expected block expression, got {}", iter.peek().raw);
+        if (!expr) raise_error("expected block expression, got {}", get_token_type_name(iter.peek().type));
         return expr;
     }
 
@@ -328,8 +328,8 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (match("defer")) {
-            consume("{", "expected '{' to start defer body");
+        if (match(keyword("defer"))) {
+            consume(punc("{"), "expected '{' to start defer body");
             auto body = finish_block_contents();
             auto offset = ast.write(AstHeader::Defer);
             ast.write(body);
@@ -343,7 +343,7 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         if (iter.is_at_end()) return {{}, true};
-        if (match(";")) return {{}, false};
+        if (match(punc(";"))) return {{}, false};
 
         // Block expression
 
@@ -356,7 +356,7 @@ struct Parser
         // Expression statement
 
         auto expr = expression();
-        return {expr, !match(";")};
+        return {expr, !match(punc(";"))};
     }
 
     AstOffset finish_block_contents()
@@ -365,7 +365,7 @@ struct Parser
 
         AstListBuilder builder{ast};
 
-        while (!is("}")) {
+        while (!is(punc("}"))) {
             auto[stmt, is_terminal] = statement();
             if (!stmt) {
                 if (is_terminal) break;
@@ -380,7 +380,7 @@ struct Parser
             }
         }
 
-        consume("}", "expected '}' to terminate block");
+        consume(punc("}"), "expected '}' to terminate block");
 
         return builder.to_list();
     }
@@ -401,7 +401,7 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        consume("{", "expected block");
+        consume(punc("{"), "expected block");
         return finish_block();
     }
 
@@ -411,7 +411,7 @@ struct Parser
 
         AstListBuilder builder{ast};
 
-        while (iter.peek().type != TokenType::Eof) {
+        while (iter.peek().type != TokenTypes::Eof) {
             auto[stmt, is_terminal] = statement();
             if (!stmt) {
                 if (is_terminal) break;
@@ -426,8 +426,8 @@ struct Parser
             }
         }
 
-        if (iter.peek().type != TokenType::Eof) {
-            raise_error("expected end of file, got {}", iter.peek().raw);
+        if (iter.peek().type != TokenTypes::Eof) {
+            raise_error("expected end of file, got {}", get_token_type_name(iter.peek().type));
         }
 
         auto offset = ast.write(AstHeader::File);
@@ -442,15 +442,15 @@ struct Parser
 
         AstOffset target{};
         auto ident = iter.peek();
-        if (ident.type == TokenType::Identifier) {
+        if (ident.type == TokenTypes::Identifier) {
             iter.advance();
             target = ast.write(AstHeader::Identifier);
-            ast.write(constants->strings.get_id(ident.raw));
-        } else if (ident.raw != ":") {
+            ast.write(ident.value);
+        } else if (ident.type != punc(":")) {
             raise_error("expected identifier or ':' to begin parameter");
         }
 
-        if (match(":")) {
+        if (match(punc(":"))) {
             return finish_var_decl(target);
         } else {
             auto offset = ast.write(get_vardecl_header(true, false, false));
@@ -459,38 +459,38 @@ struct Parser
         }
     }
 
-    AstOffset parameters(u8 end)
+    AstOffset parameters(TokenType end)
     {
         LANG_PARSER_TRACE_FUNC("closing = '{}'", char(end));
 
         AstListBuilder builder{ast};
 
         for (;;) {
-            if (iter.peek().raw[0] == end) break;
+            if (iter.peek().type == end) break;
 
             builder.add(parameter());
 
-            if (!match(",")) break;
+            if (!match(punc(","))) break;
         }
 
         return builder.to_list();
     }
 
-    AstOffset arguments(u8 end)
+    AstOffset arguments(TokenType end)
     {
         LANG_PARSER_TRACE_FUNC("closing = '{}'", char(end));
 
         AstListBuilder builder{ast};
 
         for (;;) {
-            if (iter.peek().raw[0] == end) break;
+            if (iter.peek().type == end) break;
 
             AstOffset arg;
-            if (match(".")) {
+            if (match(punc("."))) {
                 raise_error("TODO");
                 // auto ident = iter.advance();
                 // if (ident.type != TokenType::Identifier) raise_error("expected parameter name");
-                // if (iter.advance().raw != "=") raise_error("expected '=' after named parameter");
+                // if (iter.advance().raw != punc("=")) raise_error("expected '=' after named parameter");
                 // auto expr = expression();
                 // args.append(new AstCallNamedArgument{{AstNodeType::CallNamedArgument}, ident, expr});
             } else {
@@ -499,7 +499,7 @@ struct Parser
 
             builder.add(arg);
 
-            if (!match(",")) break;
+            if (!match(punc(","))) break;
         }
 
         return builder.to_list();
@@ -510,22 +510,22 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (iter.peek().raw != "(") return {};
+        if (iter.peek().type != punc("(")) return {};
 
         auto matched = iter.list->matching_pair_for(iter.peek());
-        if (matched.peek_next().raw != "->") return {};
-        // if (matched.peek_next().raw != "->" && matched.peek_next().raw != "{") return {};
+        if (matched.peek_next().type != punc("->")) return {};
+        // if (matched.peek_next().raw != punc("->") && matched.peek_next().raw != "{") return {};
 
         iter.advance();
 
         // Function
-        auto params = parameters(')');
-        consume(")", "expected ')' to follow parameter list");
+        auto params = parameters(punc(")"));
+        consume(punc(")"), "expected ')' to follow parameter list");
         AstOffset return_type{};
-        if (match("->")) {
+        if (match(punc("->"))) {
             return_type = expression(Operator::None, ExpressionMode::TypeAnnotation);
         }
-        if (match("{")) {
+        if (match(punc("{"))) {
             auto body = finish_block_contents();
             auto offset = ast.write(AstHeader::Function_Definition);
             ast.write(params);
@@ -543,11 +543,11 @@ struct Parser
     // LANG_FORCEINLINE
     // AstStruct* finish_struct()
     // {
-    //     consume("{", "expected '{' following struct type introduction");
+    //     consume(punc("{"), "expected '{' following struct type introduction");
 
     //     AstNodeListBuilder stmts;
 
-    //     while (!iter.is_at_end() && iter.peek().raw != lang_str("}")) {
+    //     while (!iter.is_at_end() && iter.peek().raw != lang_str(punc("}"))) {
     //         auto[stmt, is_terminal] = statement();
     //         if (!stmt) continue;
     //         stmts.append(stmt);
@@ -559,7 +559,7 @@ struct Parser
     //         }
     //     }
 
-    //     consume("}", "expected '}' to close struct body");
+    //     consume(punc("}"), "expected '}' to close struct body");
 
     //     return new AstStruct{{AstNodeType::Struct}, stmts.to_list()};
     // }
@@ -570,7 +570,7 @@ struct Parser
     //     auto ident = consume_identifier("expected identifier in enum value");
 
     //     AstNode* init{};
-    //     if (match("=")) {
+    //     if (match(punc("="))) {
     //         init = expression(Operator::None);
     //     }
 
@@ -581,23 +581,23 @@ struct Parser
     // AstEnum* finish_enum()
     // {
     //     AstNode* type{};
-    //     if (match(":")) {
+    //     if (match(punc(":"))) {
     //         type = expression(Operator::None, ExpressionMode::TypeAnnotation);
     //     }
 
-    //     consume("{", "expected '{' following enum type introduction");
+    //     consume(punc("{"), "expected '{' following enum type introduction");
 
     //     AstNodeListBuilder values;
 
     //     for (;;) {
-    //         if (iter.is_at_end() || is("}")) break;
+    //         if (iter.is_at_end() || is(punc("}"))) break;
 
     //         values.append(enum_value());
 
-    //         if (!match(",")) break;
+    //         if (!match(punc(","))) break;
     //     }
 
-    //     consume("}", "expected '}' following enum declaration body");
+    //     consume(punc("}"), "expected '}' following enum declaration body");
 
     //     return new AstEnum{{AstNodeType::Enum}, type, values.to_list()};
     // }
@@ -606,25 +606,25 @@ struct Parser
     // AstNode* finish_match()
     // {
     //     auto* expr = expression();
-    //     consume("{", "expected '{' followed match expression");
+    //     consume(punc("{"), "expected '{' followed match expression");
 
     //     AstNodeListBuilder arms;
 
     //     for (;;) {
-    //         if (iter.is_at_end() || is("}")) break;
+    //         if (iter.is_at_end() || is(punc("}"))) break;
 
     //         if (is("\\{")) {
     //             arms.append(splice());
     //         } else {
     //             auto pattern = expression();
-    //             consume("->", "expected '->' following match expression");
+    //             consume(punc("->"), "expected '->' following match expression");
     //             auto body = block();
 
     //             arms.append(new AstMatchArm{{AstNodeType::MatchArm}, pattern, body});
     //         }
     //     }
 
-    //     consume("}", "expected '}' following match body");
+    //     consume(punc("}"), "expected '}' following match body");
 
     //     return new AstMatch{{AstNodeType::Match}, expr, arms.to_list()};
     // }
@@ -669,11 +669,17 @@ struct Parser
     // }
 
     LANG_FORCEINLINE
-    AstOffset named_identifier()
+    AstOffset named_identifier_unchecked()
     {
-        auto token = consume_identifier("expected identifier");
+        auto token = iter.advance();
         auto offset = ast.write(AstHeader::Identifier);
-        ast.write(constants->strings.get_id(token.raw));
+        if (token.type == TokenTypes::Identifier) {
+            // pure identifier
+            ast.write(token.value);
+        } else {
+            // identifier-like keyword
+            ast.write(constants->identifiers.get_id(get_keyword_str(token.type)));
+        }
         return offset;
     }
 
@@ -682,62 +688,55 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (auto expr = maybe_block_expr()) {
-            return expr;
-        }
-
         auto next = iter.peek();
         switch (next.type) {
-            case TokenType::Keyword:
-                if (match("true")) return ast.write(AstHeader::Literal_True);
-                if (match("false")) return ast.write(AstHeader::Literal_False);
-                // if (match("enum")) {
-                //     return finish_enum();
-                // } else if (match("struct")) {
-                //     return finish_struct();
-                // } else if (match("match")) {
-                //     return finish_match();
-                // }
-                break;
-            case TokenType::Number: {
+            PARSE_MaybeBlockExpr
+            case keyword("true"):
                 iter.advance();
-                f64 value;
-                auto raw = next.number.raw;
-                auto res = std::from_chars(raw.begin(), raw.end(), value);
-                if (!res) {
-                    raise_error("error parsing number from token: {}", std::make_error_code(res.ec).message());
-                }
+                return ast.write(AstHeader::Literal_True);
+            case keyword("false"):
+                iter.advance();
+                return ast.write(AstHeader::Literal_False);
+            case keyword("enum"):
+                iter.advance();
+                raise_error("TODO");
+                // return finish_enum();
+            case keyword("struct"):
+                iter.advance();
+                raise_error("TODO");
+                // return finish_struct();
+            case keyword("match"):
+                iter.advance();
+                raise_error("TODO");
+                // return finish_match();
+            case TokenTypes::Number: {
+                iter.advance();
                 auto offset = ast.write(AstHeader::Literal_Number);
-                ast.write(constants->numbers.get_id(value));
+                ast.write(next.value);
                 return offset;
             }
-            case TokenType::String: {
+            case TokenTypes::String: {
                 iter.advance();
                 auto offset = ast.write(AstHeader::Literal_String);
-                ast.write(constants->strings.get_id(next.string.value));
+                ast.write(next.value);
                 return offset;
             }
-            case TokenType::Identifier:
-                return named_identifier();
-            case TokenType::Punctuation:
-                // if (is("${")) {
-                //     return token_sequence();
-                // }
-                if (next.punctuation.value == lang_str("(")) {
-                    if (auto func = maybe_function()) {
-                        return func;
-                    } else {
-                        // Grouping
-                        iter.advance();
-                        auto expr = expression();
-                        consume(")", "expected ')' to terminate group");
-                        return expr;
-                    }
-
-                    break;
+            TOKEN_IsIdentifierLikeCases:
+                return named_identifier_unchecked();
+            case punc("${"):
+                raise_error("TODO");
+                // return token_sequence();
+            case punc("("):
+                if (auto func = maybe_function()) {
+                    return func;
+                } else {
+                    // Grouping
+                    iter.advance();
+                    auto expr = expression();
+                    consume(punc(")"), "expected ')' to terminate group");
+                    return expr;
                 }
                 break;
-            default:
         }
 
         return {};
@@ -750,15 +749,15 @@ struct Parser
         AstOffset type_expr{};
         bool constant = true;
 
-        if (!is("=") && !is(":")) {
+        if (!is(punc("=")) && !is(punc(":"))) {
             type_expr = expression(Operator::None, ExpressionMode::TypeAnnotation);
         }
 
         bool has_init = false;
-        if (match("=")) {
+        if (match(punc("="))) {
             has_init = true;
             constant = false;
-        } else if (match(":")) {
+        } else if (match(punc(":"))) {
             has_init = true;
         } else {
             constant = false;
@@ -784,8 +783,8 @@ struct Parser
         auto lhs = maybe_non_recursive_expression();
         if (!lhs) {
             auto op_token = iter.advance();
-            auto op = get_prefix_op(op_token.raw, mode);
-            if (op == Operator::None) raise_error("expected valid lhs or prefix operator, got {}", op_token.raw);
+            auto op = get_prefix_op(op_token.type, mode);
+            if (op == Operator::None) raise_error("expected valid lhs or prefix operator, got {}", get_token_type_name(op_token.type));
 
             switch (op) {
 // -----------------------------------------------------------------------------
@@ -821,7 +820,7 @@ struct Parser
         for (;;) {
             auto op_token = iter.peek();
 
-            auto op = get_other_op(op_token.raw, mode);
+            auto op = get_other_op(op_token.type, mode);
             if (op == Operator::None) {
 // #if LANG_NOISY_PARSER
 //                 log_debug("{}unrecognised operator '{}', breaking", indent_str(_depth), op_token.raw);
@@ -851,17 +850,17 @@ struct Parser
                 switch (op) {
                     case Operator::FieldAccess: {
                         auto field = iter.advance();
-                        if (field.type != TokenType::Identifier)
-                            raise_error("expected field following field access operator '.', got {}", field.raw);
+                        if (field.type != TokenTypes::Identifier)
+                            raise_error("expected field following field access operator '.', got {}", get_token_type_name(field.type));
                         auto new_lhs = ast.write(AstHeader::FieldAccess);
-                        ast.write(constants->strings.get_id(field.raw));
+                        ast.write(field.value);
                         ast.write(lhs);
                         lhs = new_lhs;
                         break;
                     }
                     case Operator::Call: {
-                        auto args = arguments(')');
-                        consume(")", "expected ')' to terminate call");
+                        auto args = arguments(punc(")"));
+                        consume(punc(")"), "expected ')' to terminate call");
                         auto new_lhs = ast.write(AstHeader::Call);
                         ast.write(lhs);
                         ast.write(args);
@@ -869,8 +868,8 @@ struct Parser
                         break;
                     }
                     case Operator::Subscript: {
-                        auto args = arguments(']');
-                        consume("]", "expected ']' to terminate subscript");
+                        auto args = arguments(punc("]"));
+                        consume(punc("]"), "expected ']' to terminate subscript");
                         auto new_lhs = ast.write(AstHeader::Subscript);
                         ast.write(lhs);
                         ast.write(args);
@@ -878,7 +877,7 @@ struct Parser
                         break;
                     }
                 #define X(name, ...) case Operator::name: \
-                { \
+                    { \
                         auto new_lhs = ast.write(AstHeader::name); \
                         ast.write(lhs); \
                         lhs = new_lhs; \

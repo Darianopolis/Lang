@@ -11,33 +11,17 @@ NAMESPACE_USE(lang)
 
 int main()
 {
-    // auto message = "Hello, world!\n";
-    // auto message = read_file("src/lang/scan.cpp");
-    // auto message = read_file("/media/home/Dev/Data/sf-city-lots-json-master/citylots.json");
     // auto message = read_file("test/small.lang");
     // auto message = read_file("test/large.lang");
-    // auto message = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃ";
-    // auto message = read_file("test/test.lang");
-
-    // auto message = "-x + 2 * -y++ / 4";
-
-    // auto message = "((x, y, bar) {})(1, 2, .bar = 3)";
-    // auto message = "(x: i32, y := 123, clamp := false){}(1, 2, .clamp = true)";
-    // auto message = "(foo: (:i32 = 123) -> i32 = (x) { x ** 2 }){ foo(123) }()";
-    // auto message = "a + b * c * d + e";
-    // auto message = "a & b | (c ~| d)";
-    // auto message = "a | b^() > c + d";
-    // auto message = "(: ++list = 123) -> i32";
-    // auto message = "-a++[].b && !++c()^ || &foo^";
-    // auto message = "a & b > c && d";
-    // auto message = "main :: () { print(\"Hello, world\") }";
 
     // auto message = read_file("test/vulkan_test.lang");
+
+    // std::string_view message = "x := 2; 1 + x * 2";
 
 #if 1
     std::string_view message = R"(
 x := 1;
-while x < 10  {
+while x < 10 {
     x += 1;
     if x % 2 == 0 {
         x *= math.pi;
@@ -59,6 +43,11 @@ fib :: (n: f64) -> f64 {
 };
 
 ++foo^.bar(1, 2, "3");
+
+foo :: @as(u8, 1234);
+bar :: @typeOf(foo);
+alpha: u32 = undefined;
+if beta != null and x {}
 )";
 #endif
 
@@ -206,51 +195,20 @@ x :: 123;
 )";
 #endif
 
+    log_debug("scanning...");
+
+    TokenList tokens;
+    tokens.tokens.reserve(message.size());
+    Constants constants;
+
     auto start = std::chrono::steady_clock::now();
-    auto tokens = scan(message);
+    scan(tokens, constants, message);
     auto end = std::chrono::steady_clock::now();
 
+#if 1
+    log_debug("tokens");
 
-#if 0
-    log_debug("token details");
-
-    for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
-        auto token = iter.peek();
-        switch (token.type) {
-            case lang::TokenType::Keyword:
-                log_info("{:4} |     keyword |     | {}", iter.index(), token.keyword.value);
-                break;
-            case TokenType::Identifier:
-                log_info("{:4} |  identifier |   {} | {}", iter.index(), token.identifier.is_at ? "@" : " ", token.identifier.value);
-                break;
-            case TokenType::String:
-                if (token.string.is_raw) {
-                    log_info("{:4} |      string | raw | {}", iter.index(), token.string.value);
-                } else {
-                    log_info("{:4} |      string |     | {}", iter.index(), token.string.value);
-                }
-                break;
-            case TokenType::Number:
-                log_info("{:4} |      number |  {:2} | {}", iter.index(), token.number.base, token.number.raw);
-                break;
-            case TokenType::Punctuation:
-                // if (auto matched = iter.matching_pair_for(token)) {
-                //     log_info("{:4} | punctuation |     | {}         (matching {} @ {})", iter.index(), token.punctuation.value,
-                //         matched->punctuation.value, matched.index());
-                // } else {
-                log_info("{:4} | punctuation |     | {}", iter.index(), token.punctuation.value);
-                // }
-                break;
-            default:
-                raise_error("unknown token type: {}", std::to_underlying(token.type));
-        }
-    }
-#endif
-
-#if 0
-    log_debug("matched view");
-
-    auto indent_str = "  ";
+    auto indent_str = ". ";
     auto indent = 0;
 
     for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
@@ -260,12 +218,12 @@ x :: 123;
             indent--;
         }
 
-        auto message = std::format("{:4} ", iter.index());
+        auto message = std::format("{:7} ", iter.index());
         for (auto i = 0; i < indent; ++i) {
             message += indent_str;
         }
-        message += token.raw;
-        log_info("{}", message);
+        message += token_to_string(constants, token);
+        std::println("{}", message);
 
         if (!matched.is_at_end() && matched.index() > iter.index()) {
             indent++;
@@ -275,13 +233,12 @@ x :: 123;
 
     {
         auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
-        auto size = tokens.tokens.size() * sizeof(Token);
+        auto size = tokens.tokens.size();
         log_debug("scanned in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
         log_debug("tokenlist size = {} ({:.2f}x)", byte_size_to_string(size), f64(size) / message.size());
     }
 
 #if 1
-    Constants constants;
     start = std::chrono::steady_clock::now();
     auto[ast, offset] = parse(tokens, constants);
     end = std::chrono::steady_clock::now();
@@ -292,9 +249,6 @@ x :: 123;
     }
 
     ast_print_details(constants, ast, offset, message);
-
-    // auto res = interpret(constants, ast);
-    // log_debug("res = {}", res);
 #endif
 
 #if 0

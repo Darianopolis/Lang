@@ -94,6 +94,20 @@ def git_source(name, url, branch, dumb = False):
 
     return path
 
+hg_path = shutil.which("hg")
+
+def hg_source(name, url):
+    path = f"{vendor_folder}/{name}"
+
+    if os.path.exists(f"{path}"):
+        if args.update:
+            panic("TODO")
+    else:
+        log_info(f"Cloning [{name}]")
+        subprocess.Popen(["hg", "clone", url, path], executable = hg_path).wait()
+
+    return path
+
 defines = []
 sources = []
 includes = []
@@ -267,6 +281,13 @@ def build():
         log_info_progress_end()
 
     log_info_progress_end()
+
+# -----------------------------------------------------------------------------
+
+dyncall_dir = hg_source("dyncall", "https://dyncall.org/pub/dyncall/dyncall/")
+include(f"{dyncall_dir}")
+# link(f"{dyncall_dir}/dynload/libdynload_s.a")
+# link(f"{dyncall_dir}/dyncall/libdyncall_s.a")
 
 # -----------------------------------------------------------------------------
 

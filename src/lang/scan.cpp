@@ -2,6 +2,8 @@
 
 #include "unicode.hpp"
 
+#include <cmath>
+
 NAMESPACE_USE(lang)
 
 NAMESPACE_BEGIN()
@@ -78,6 +80,7 @@ NAMESPACE_END
 
 struct ScanState
 {
+    Constants* constants;
     std::string_view source;
     usz position;
 
@@ -154,44 +157,132 @@ struct ScanState
 
     void read_punctuation()
     {
-        auto raw_start = position;
+        auto type = TokenTypes::Invalid;
 
-        static constexpr auto OrderedPunctuationSequences = [] {
-            std::array out = PunctuationSequences;
-            std::ranges::sort(out, std::greater{}, [&](const auto& v) { return v.size(); });
-            return out;
-        }();
-
-        std::string_view matched;
-        for (auto& punc : OrderedPunctuationSequences) {
-            auto str = source.substr(raw_start, punc.size());
-            if (str == punc) {
-                matched = str;
+        switch (source[position++]) {
+            case '^': type = punc("^"); break;
+            case '(': type = punc("("); break;
+            case ')': type = punc(")"); break;
+            case '{': type = punc("{"); break;
+            case '}': type = punc("}"); break;
+            case '[': type = punc("["); break;
+            case ']': type = punc("]"); break;
+            case ':': type = punc(":"); break;
+            case ';': type = punc(";"); break;
+            case ',': type = punc(","); break;
+            case '?': type = punc("?"); break;
                 break;
-            }
+            case '+':
+                switch (source[position]) {
+                    case '=': position++; type = punc("+="); break;
+                    case '+': position++; type = punc("++"); break;
+                    default:              type = punc("+");  break;
+                }
+                break;
+            case '-':
+                switch (source[position]) {
+                    case '=': position++; type = punc("-="); break;
+                    case '-': position++; type = punc("--"); break;
+                    case '>': position++; type = punc("->"); break;
+                    default:              type = punc("-");  break;
+                }
+                break;
+            case '*':
+                switch (source[position]) {
+                    case '=': position++; type = punc("*="); break;
+                    case '*':
+                        switch (source[++position]) {
+                            case '=': position++; type = punc("**="); break;
+                            default:              type = punc("**");  break;
+                        }
+                        break;
+                    default: type = punc("*"); break;
+                }
+                break;
+            case '/': if (source[position] == '=') { position++; type = punc("/="); } else { type = punc("/"); } break;
+            case '%': if (source[position] == '=') { position++; type = punc("%="); } else { type = punc("%"); } break;
+            case '!': if (source[position] == '=') { position++; type = punc("!="); } else { type = punc("!"); } break;
+            case '=': if (source[position] == '=') { position++; type = punc("=="); } else { type = punc("="); } break;
+            case '&': if (source[position] == '=') { position++; type = punc("&="); } else { type = punc("&"); } break;
+            case '|': if (source[position] == '=') { position++; type = punc("|="); } else { type = punc("|"); } break;
+            case '<':
+                switch (source[position]) {
+                    case '=':         position++; type = punc("<="); break;
+                    case '<':
+                        switch (source[++position]) {
+                            case '=': position++; type = punc("<<="); break;
+                            default:              type = punc("<<");  break;
+                        }
+                        break;
+                    default:                      type = punc("<");  break;
+                }
+                break;
+            case '>':
+                switch (source[position]) {
+                    case '=':         position++; type = punc(">="); break;
+                    case '>':
+                        switch (source[++position]) {
+                            case '=': position++; type = punc(">="); break;
+                            default:              type = punc(">");  break;
+                        }
+                        break;
+                    default:                      type = punc(">");  break;
+                }
+                break;
+            case '~':
+                switch (source[position]) {
+                    case '|':
+                        switch (source[++position]) {
+                            case '=': position++; type = punc("~|="); break;
+                            default:              type = punc("~|");  break;
+                        }
+                        break;
+                    default:                      type = punc("~");   break;
+                }
+                break;
+            case '$':
+                if (source[position++] != '{') raise_error("expected '{{' following $");
+                type = punc("${");
+                break;
+            case '\\':
+                switch (source[position++]) {
+                    case '{':; type = punc("\\{"); break;
+                    case 'i':
+                        if (source[position++] != 'd') raise_error("expected '{{' or 'id{{' following '\\'");
+                        if (source[position++] != '{') raise_error("expected '{{' or 'id{{' following '\\'");
+                        type = punc("\\id{");
+                        break;
+                    default:
+                        raise_error("expected '{{' or 'id{{' following '\\'");
+                }
+                break;
+            case '.':
+                switch (source[position]) {
+                    case '.':
+                        switch (source[++position]) {
+                            case '=': position++; type = punc("..="); break;
+                            default:              type = punc("..");  break;
+                        }
+                        break;
+                    default:                      type = punc(".");   break;
+                }
+                break;
         }
-
-        if (matched.empty()) {
-            raise_error("punctuation sequence starting with [{}] did not match any valid langauge sequences", source[raw_start]);
-        }
-
-        position += matched.size();
 
         token = {
-            .type = TokenType::Punctuation,
-            .raw = matched,
-            .punctuation = { .value = matched },
+            .type = type,
         };
     }
 
     void read_number()
     {
+        auto raw_start = position;
+
         bool (*digit_test_)(u8) = is_decimal_digit;
         u8 exponent_separator = 'e';
 
         u32 base = 10;
-        auto num_start = position;
-        auto raw_start = position;
+        // auto num_start = position;
 
         // Identify hexadecimal or binary number
         if (peek() == '0') {
@@ -201,19 +292,19 @@ struct ScanState
                     digit_test_ = is_hexadecimal_digit;
                     exponent_separator = 'p';
                     base = 16;
-                    num_start += 2;
+                    // num_start += 2;
                     advance();
                     break;
                 case 'b':
                     digit_test_ = is_binary_digit;
                     base = 2;
-                    num_start += 2;
+                    // num_start += 2;
                     advance();
                     break;
                 case 'o':
                     digit_test_ = is_octal_digit;
                     base = 8;
-                    num_start += 2;
+                    // num_start += 2;
                     advance();
                     break;
             }
@@ -270,19 +361,14 @@ struct ScanState
         auto end = position;
 
         token = {
-            .type = TokenType::Number,
-            .raw = source.substr(raw_start, end - raw_start),
-            .number = {
-                .base = base,
-                .raw = source.substr(num_start, end - num_start),
-            },
+            .type = TokenTypes::Number,
+            .value = constants->numbers.get_id(source.substr(raw_start, end - raw_start)),
+            // .value = u32(raw_start),
         };
     }
 
     void read_identifier()
     {
-        auto raw_start = position;
-
         bool is_at = peek() == '@';
         if (is_at) advance();
 
@@ -292,42 +378,71 @@ struct ScanState
             advance();
             u8 c = peek();
             if (!is_valid_identifier_continue_element(c)) {
-                auto end = position;
-
-                auto raw = source.substr(raw_start, end - raw_start);
-
-                for (auto& k : Keywords) {
-                    if (k == raw) {
-                        token = {
-                            .type = TokenType::Keyword,
-                            .raw = raw,
-                            .keyword = {
-                                .value = source.substr(start, end - start),
-                            },
-                        };
-
-                        return;
-                    }
-                }
-
-                token = {
-                    .type = TokenType::Identifier,
-                    .raw = raw,
-                    .identifier = {
-                        .is_at = is_at,
-                        .value = source.substr(start, end - start),
-                    },
-                };
-
-                return;
+                break;
             }
         }
+
+        auto end = position;
+
+        auto ident = source.substr(start, end - start);
+
+        TokenType type = TokenTypes::Identifier;
+
+        switch (ident[0]) {
+            case 'a':
+                if      (ident.substr(1) == "nd") type = keyword("and");
+                else if (ident.substr(1) == "s")  type = keyword("@as");
+                break;
+            case 'b': if (ident.substr(1) == "reak")    type = keyword("break");    break;
+            case 'c': if (ident.substr(1) == "ontinue") type = keyword("continue"); break;
+            case 'd': if (ident.substr(1) == "efer")    type = keyword("defer");    break;
+            case 'e':
+                if      (ident.substr(1) == "lse") type = keyword("else");
+                else if (ident.substr(1) == "num") type = keyword("enum");
+                break;
+            case 'f':
+                if      (ident.substr(1) == "or")   type = keyword("for");
+                else if (ident.substr(1) == "alse") type = keyword("false");
+                break;
+            // gh
+            case 'i': if (ident.substr(1) == "f") type = keyword("if"); break;
+            // jkl
+            case 'm': if (ident.substr(1) == "atch") type = keyword("match"); break;
+            case 'n': if (ident.substr(1) == "ull")  type = keyword("null");  break;
+            case 'o': if (ident.substr(1) == "r")    type = keyword("or");    break;
+            // pq
+            case 'r': if (ident.substr(1) == "eturn")    type = keyword("return"); break;
+            case 's': if (ident.substr(1) == "lse")      type = keyword("else");   break;
+            case 't':
+                if      (ident.substr(1) == "rue")   type = keyword("true");
+                else if (ident.substr(1) == "ypeOf") type = keyword("@typeOf");
+                break;
+            case 'u': if (ident.substr(1) == "ndefined") type = keyword("undefined"); break;
+            // v
+            case 'w': if (ident.substr(1) == "hile") type = keyword("while"); break;
+            // xyz
+        }
+
+        if (type == TokenTypes::Identifier) {
+            if (is_at) {
+                raise_error("unknown intrinsic: {}", ident);
+            } else {
+                token = {
+                    .type = TokenTypes::Identifier,
+                    .value = constants->identifiers.get_id(ident),
+                };
+            }
+        } else {
+            token = {
+                .type = type,
+            };
+        }
+
+        return;
     }
 
     void read_string()
     {
-        auto raw_start = position;
-
         // Consume "
         advance();
         auto start = position;
@@ -346,19 +461,16 @@ struct ScanState
         auto end = position - 1;
 
         token = {
-            .type = TokenType::String,
-            .raw = source.substr(raw_start, position - raw_start),
-            .string = {
-                .is_raw = false,
-                .value = source.substr(start, end - start),
-            },
+            .type = TokenTypes::String,
+            .value = constants->strings.get_id(source.substr(start, end - start)),
+            // .value = u32(start),
         };
     }
 
     std::string scratch_raw_string_init_sequence;
     void read_rawstring()
     {
-        auto raw_start = position;
+        [[maybe_unused]] auto raw_start = position;
 
         // Consume '
         advance();
@@ -381,23 +493,20 @@ struct ScanState
             raise_error("eof while parsing rawstring");
         }
 
-        auto str_end = end_seq_pos;
+        [[maybe_unused]] auto str_end = end_seq_pos;
 
         position = end_seq_pos + scratch_raw_string_init_sequence.size();
 
         token = {
-            .type = TokenType::String,
-            .raw = source.substr(raw_start, position - raw_start),
-            .string = {
-                .is_raw = true,
-                .value = source.substr(str_start, str_end - str_start),
-            },
+            .type = TokenTypes::String,
+            .value = constants->strings.get_id(source.substr(str_start, str_end - str_start)),
+            // .value = u32(raw_start),
         };
     }
 
     bool scan()
     {
-        token.type = TokenType::Invalid;
+        token.type = TokenTypes::Invalid;
 
         while (!is_at_end()) {
             u8 c = peek();
@@ -416,7 +525,7 @@ struct ScanState
                 }
             }
 
-            if (token.type != TokenType::Invalid) {
+            if (token.type != TokenTypes::Invalid) {
                 return true;
             }
         }
@@ -425,66 +534,73 @@ struct ScanState
     }
 };
 
-TokenList lang::scan(std::string_view source)
+void lang::scan(TokenList& out, Constants& constants, std::string_view source)
 {
     auto res = simdutf::validate_utf8_with_errors(source);
     if (res.is_err()) raise_error("source not valid UTF-8: {}", simdutf_err_to_string(res.error));
 
+    out.constants = &constants;
+    out.tokens.clear();
+
     ScanState scanner{
+        .constants = &constants,
         .source = source,
         .position = 0,
     };
 
-    TokenList list;
-
     std::vector<u32> beginning_tokens;
 
     while (scanner.scan()) {
-        auto i = list.tokens.size();
-        if (scanner.token.type == TokenType::Punctuation) {
-            auto b = scanner.token.punctuation.value;
+        u32 offset = out.tokens.size();
 
-            switch (make_opstr(RuntimeLangString(b))) {
-                case make_opstr("{"):
-                case make_opstr("["):
-                case make_opstr("("):
-                case make_opstr("${"):
-                case make_opstr("\\{"):
-                case make_opstr("\\id{"): {
-                    beginning_tokens.emplace_back(i);
-                    break;
+        switch (scanner.token.type) {
+            case punc("{"):
+            case punc("["):
+            case punc("("):
+            case punc("${"):
+            case punc("\\{"):
+            case punc("\\id{"):
+            {
+                beginning_tokens.emplace_back(offset);
+                break;
+            }
+            case punc("}"):
+            case punc("]"):
+            case punc(")"):
+            {
+                if (beginning_tokens.empty()) {
+                    raise_error("unexpected closing bracket, no open brackets");
                 }
-                case make_opstr("}"):
-                case make_opstr("]"):
-                case make_opstr(")"): {
-                    if (beginning_tokens.empty()) {
-                        raise_error("unexpected closing '{}' - no matching open", b);
-                    }
-                    auto& begin_token = list.tokens[beginning_tokens.back()];
-                    auto a = begin_token.punctuation.value;
-                    u8 expected = '\0';
-                    switch (b[0]) {
-                        case '}': expected = '{'; break;
-                        case ']': expected = '['; break;
-                        case ')': expected = '('; break;
-                    }
-                    if (a.back() != expected) {
-                        raise_error("mismatched pair - found closing '{}' but last open was '{}'", b, a);
-                    }
+                auto begin_token_type = TokenType(out.tokens[beginning_tokens.back()]);
 
-                    begin_token.punctuation.matching = i;
-                    scanner.token.punctuation.matching = beginning_tokens.back();
-
-                    beginning_tokens.pop_back();
+                switch (scanner.token.type) {
+                    case punc("}"):
+                        if (begin_token_type != punc("{")
+                                && begin_token_type != punc("\\{")
+                                && begin_token_type != punc("\\id{"))
+                            raise_error("mismatched pair - found unexpected closing '}}'");
+                        break;
+                    case punc("]"):
+                        if (begin_token_type != punc("["))
+                            raise_error("mismatched pair - found unexpected closing ']'");
+                        break;
+                    case punc(")"):
+                        if (begin_token_type != punc("("))
+                            raise_error("mismatched pair - found unexpected closing ')'");
                 }
+
+                // begin_token.value = offset;
+                std::memcpy(out.tokens.data() + beginning_tokens.back() + 1, &offset, 4);
+                scanner.token.value = beginning_tokens.back();
+
+                beginning_tokens.pop_back();
             }
         }
-        list.tokens.emplace_back(scanner.token);
+
+        out.append(scanner.token);
     }
 
     if (!beginning_tokens.empty()) {
-        raise_error("unclosed '{}'", list.tokens[beginning_tokens.back()].punctuation.value);
+        raise_error("unclosed brackets");
     }
-
-    return list;
 }

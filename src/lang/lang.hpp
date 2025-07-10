@@ -15,6 +15,45 @@ NAMESPACE_BEGIN(lang)
 
 // -----------------------------------------------------------------------------
 
+template<typename T>
+struct Dedup
+{
+    ankerl::unordered_dense::map<T, u32> lookup;
+    std::vector<T> cache{};
+
+    usz total_lookups = 0;
+
+    usz unique_count()
+    {
+        return cache.size();
+    }
+
+    u32 get_id(T item)
+    {
+        total_lookups++;
+        auto& id = lookup[item];
+        if (!id) {
+            cache.emplace_back(item);
+            id = cache.size();
+        }
+        return id;
+    }
+
+    T from_id(u32 id)
+    {
+        return cache[id - 1];
+    }
+};
+
+struct Constants
+{
+    Dedup<std::string_view> identifiers;
+    Dedup<std::string_view> strings;
+    Dedup<std::string_view> numbers;
+};
+
+// -----------------------------------------------------------------------------
+
 constexpr std::array Keywords
 {
     "if", "else",
@@ -23,6 +62,10 @@ constexpr std::array Keywords
     "return", "defer",
     "true", "false",
     "struct", "enum",
+    "and", "or",
+    "undefined", "null",
+
+    "@as", "@typeOf",
 };
 
 constexpr auto PunctuationSequences = std::to_array<std::string_view>({
@@ -42,7 +85,7 @@ constexpr auto PunctuationSequences = std::to_array<std::string_view>({
     "/",    // divide
     "/=",   // divide assign
     "%",    // modulo
-    "%=",   // moduloe assign
+    "%=",   // modulo assign
     "<",    // less than
     "<=",   // less greater
     "<<",   // shift left
@@ -53,10 +96,8 @@ constexpr auto PunctuationSequences = std::to_array<std::string_view>({
     ">>=",  // shift right assign
     "&",    // bitwise and
     "&=",   // bitwise and assign
-    "&&",   // logical and
     "|",    // bitwise or
     "|=",   // bitwise or assign
-    "||",   // logical or
     "=",    // assign
     "==",   // equal
     "!",    // logical negate
@@ -84,34 +125,90 @@ constexpr auto PunctuationSequences = std::to_array<std::string_view>({
     "?",    // *reserved
 });
 
-consteval std::string_view lang_str(std::string_view str)
-{
-    for (auto key : Keywords) if (str == key) return str;
-    for (auto punc : PunctuationSequences) if (str == punc) return str;
+enum class TokenType : u8 {};
 
-    raise_error("Expected valid language string, got '{}'", str);
+namespace TokenTypes {
+    constexpr TokenType Invalid      = TokenType(0);
+    constexpr TokenType Eof          = TokenType(1);
+    constexpr TokenType Identifier   = TokenType(2);
+    constexpr TokenType String       = TokenType(3);
+    constexpr TokenType Number       = TokenType(4);
+
+    constexpr TokenType Keyword_First = TokenType(5);
+    constexpr TokenType Keyword_Last  = TokenType(5 + Keywords.size() - 1);
+    constexpr TokenType Punc_First    = TokenType(5 + Keywords.size());
+    constexpr TokenType Punc_Last     = TokenType(5 + Keywords.size() + PunctuationSequences.size() - 1);
+};
+
+inline
+std::string_view get_punc_str(TokenType type)
+{
+    return PunctuationSequences[std::to_underlying(type) - std::to_underlying(TokenTypes::Punc_First)];
 }
 
-struct StaticLangString
+inline
+std::string_view get_keyword_str(TokenType type)
 {
-    std::string_view str;
+    return Keywords[std::to_underlying(type) - std::to_underlying(TokenTypes::Keyword_First)];
+}
 
-    template<size_t Size>
-    consteval StaticLangString(const char (&str)[Size])
-        : str(lang_str(std::string_view(str)))
-    {}
-
-    consteval StaticLangString(std::string_view _str)
-        : str(lang_str(_str))
-    {}
-};
-
-struct RuntimeLangString
+inline
+std::string_view get_token_type_name(TokenType type)
 {
-    std::string_view str;
+    switch (type) {
+        case TokenTypes::Identifier:
+            return "Identifier";
+        case TokenTypes::String:
+            return "String";
+        case TokenTypes::Number:
+            return "Number";
+        case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
+            return get_keyword_str(type);
+        case TokenTypes::Punc_First...TokenTypes::Punc_Last:
+            return get_punc_str(type);
+        default:
+            raise_error("");
+    }
+}
 
-    explicit RuntimeLangString(std::string_view _str): str(_str) {}
-};
+consteval TokenType keyword(std::string_view str)
+{
+    for (usz i = 0; i < Keywords.size(); ++i) {
+        if (Keywords[i] == str) {
+            return TokenType(std::to_underlying(TokenTypes::Keyword_First) + i);
+        }
+    }
+    raise_error("Expected valid keyword, got '{}'", str);
+}
+
+consteval TokenType punc(std::string_view str)
+{
+    for (usz i = 0; i < PunctuationSequences.size(); ++i) {
+        if (PunctuationSequences[i] == str) {
+            return TokenType(std::to_underlying(TokenTypes::Punc_First) + i);
+        }
+    }
+    raise_error("Expected valid keyword, got '{}'", str);
+}
+
+// TODO: use unique AST nodes for undefined/nodes instead of identifiers
+#define TOKEN_IsIdentifierLikeCases \
+    case TokenTypes::Identifier: \
+    case keyword("undefined"): \
+    case keyword("null"): \
+    case keyword("@as"): \
+    case keyword("@typeOf") \
+
+inline
+bool token_type_is_identifier_like(TokenType type)
+{
+    switch (type) {
+        TOKEN_IsIdentifierLikeCases:
+            return true;
+        default:
+            return false;
+    }
+}
 
 // -----------------------------------------------------------------------------
 
@@ -164,7 +261,7 @@ enum class Operator : u16
 {
     None,
 
-#define X(i) i,
+#define X(i, ...) i,
     OPS_All
 #undef X
 };
@@ -175,32 +272,10 @@ std::string_view get_op_name(Operator op)
     switch (op) {
         case Operator::None: return "None";
 
-#define X(o) case Operator::o: return #o;
+#define X(o, ...) case Operator::o: return #o;
         OPS_All
 #undef X
     }
-}
-
-enum class OperatorString : u32 { };
-
-constexpr OperatorString make_opstr(const char* op, u32 len)
-{
-    u32 hash {};
-    for (u32 i = 0; i < len; ++i) {
-        hash |= u32(op[i]) << (i * 8);
-    }
-
-    return OperatorString(hash);
-}
-
-constexpr OperatorString make_opstr(RuntimeLangString op)
-{
-    return make_opstr(op.str.data(), u32(op.str.size()));
-}
-
-consteval OperatorString make_opstr(StaticLangString op)
-{
-    return make_opstr(op.str.data(), u32(op.str.size()));
 }
 
 enum class ExpressionMode
@@ -217,76 +292,76 @@ constexpr std::string_view get_expr_mode_name(ExpressionMode mode)
     }
 }
 
-constexpr Operator get_prefix_op(std::string_view op, ExpressionMode mode)
+constexpr Operator get_prefix_op(TokenType type, ExpressionMode mode)
 {
-    if (op == lang_str("break")) return Operator::Break;
-    if (op == lang_str("return")) return Operator::Return;
-    if (op == lang_str("continue")) return Operator::Continue;
+    switch (type) {
+        case keyword("break"): return Operator::Break;
+        case keyword("return"): return Operator::Return;
+        case keyword("continue"): return Operator::Continue;
 
-    switch (make_opstr(RuntimeLangString(op))) {
-        case make_opstr("&"): return Operator::AddressOf;
+        case punc("&"): return Operator::AddressOf;
 
-        case make_opstr("++"): return Operator::Preincrement;
-        case make_opstr("--"): return Operator::Predecrement;
+        case punc("++"): return Operator::Preincrement;
+        case punc("--"): return Operator::Predecrement;
 
-        case make_opstr("+"): return Operator::Arithmetic_Identity;
-        case make_opstr("-"): return Operator::Arithmetic_Negate;
-        case make_opstr("~"): return Operator::Bitwise_Negate;
-        case make_opstr("!"): return Operator::Logical_Negate;
+        case punc("+"): return Operator::Arithmetic_Identity;
+        case punc("-"): return Operator::Arithmetic_Negate;
+        case punc("~"): return Operator::Bitwise_Negate;
+        case punc("!"): return Operator::Logical_Negate;
     }
     return Operator::None;
 }
 
-constexpr Operator get_other_op(std::string_view op, ExpressionMode mode)
+constexpr Operator get_other_op(TokenType type, ExpressionMode mode)
 {
-    switch (make_opstr(RuntimeLangString(op))) {
-        case make_opstr("^"):   return Operator::Dereference;
-        case make_opstr("++"):  return Operator::Postincrement;
-        case make_opstr("--"):  return Operator::Postdecrement;
-        case make_opstr("("):   return Operator::Call;
-        case make_opstr("["):   return Operator::Subscript;
-        case make_opstr("."):   return Operator::FieldAccess;
+    switch (type) {
+        case punc("^"):   return Operator::Dereference;
+        case punc("++"):  return Operator::Postincrement;
+        case punc("--"):  return Operator::Postdecrement;
+        case punc("("):   return Operator::Call;
+        case punc("["):   return Operator::Subscript;
+        case punc("."):   return Operator::FieldAccess;
 
-        case make_opstr("+"):   return Operator::Add;
-        case make_opstr("-"):   return Operator::Subtract;
-        case make_opstr("*"):   return Operator::Multiply;
-        case make_opstr("/"):   return Operator::Divide;
-        case make_opstr("%"):   return Operator::Modulo;
-        case make_opstr("**"):  return Operator::Power;
+        case punc("+"):   return Operator::Add;
+        case punc("-"):   return Operator::Subtract;
+        case punc("*"):   return Operator::Multiply;
+        case punc("/"):   return Operator::Divide;
+        case punc("%"):   return Operator::Modulo;
+        case punc("**"):  return Operator::Power;
 
-        case make_opstr("<<"):  return Operator::ShiftLeft;
-        case make_opstr(">>"):  return Operator::ShiftRight;
-        case make_opstr("~|"):  return Operator::Xor;
-        case make_opstr("&"):   return Operator::Bitwise_And;
-        case make_opstr("|"):   return Operator::Bitwise_Or;
+        case punc("<<"):  return Operator::ShiftLeft;
+        case punc(">>"):  return Operator::ShiftRight;
+        case punc("~|"):  return Operator::Xor;
+        case punc("&"):   return Operator::Bitwise_And;
+        case punc("|"):   return Operator::Bitwise_Or;
 
-        case make_opstr("&&"):  return Operator::Logical_And;
-        case make_opstr("||"):  return Operator::Logical_Or;
+        case keyword("and"):  return Operator::Logical_And;
+        case keyword("or"):  return Operator::Logical_Or;
 
-        case make_opstr("=="):  return Operator::Equal;
-        case make_opstr("!="):  return Operator::NotEqual;
-        case make_opstr(">"):   return Operator::Greater;
-        case make_opstr(">="):  return Operator::GreaterEqual;
-        case make_opstr("<"):   return Operator::Less;
-        case make_opstr("<="):  return Operator::LessEqual;
+        case punc("=="):  return Operator::Equal;
+        case punc("!="):  return Operator::NotEqual;
+        case punc(">"):   return Operator::Greater;
+        case punc(">="):  return Operator::GreaterEqual;
+        case punc("<"):   return Operator::Less;
+        case punc("<="):  return Operator::LessEqual;
 
-        case make_opstr(".."):  return Operator::Range_Exclusive;
-        case make_opstr("..="): return Operator::Range_Inclusive;
+        case punc(".."):  return Operator::Range_Exclusive;
+        case punc("..="): return Operator::Range_Inclusive;
 
-        case make_opstr("="):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::Assign;
-        case make_opstr(":"):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::VarDecl;
+        case punc("="):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::Assign;
+        case punc(":"):   return (mode == ExpressionMode::TypeAnnotation) ? Operator::None : Operator::VarDecl;
 
-        case make_opstr("+="):  return Operator::Assign_Add;
-        case make_opstr("-="):  return Operator::Assign_Subtract;
-        case make_opstr("*="):  return Operator::Assign_Multiply;
-        case make_opstr("/="):  return Operator::Assign_Divide;
-        case make_opstr("%="):  return Operator::Assign_Modulo;
-        case make_opstr("**="): return Operator::Assign_Exponentiate;
-        case make_opstr("<<="): return Operator::Assign_ShiftLeft;
-        case make_opstr(">>="): return Operator::Assign_ShiftRight;
-        case make_opstr("~|="): return Operator::Assign_Xor;
-        case make_opstr("&="):  return Operator::Assign_Bitwise_And;
-        case make_opstr("|="):  return Operator::Assign_Bitwise_Or;
+        case punc("+="):  return Operator::Assign_Add;
+        case punc("-="):  return Operator::Assign_Subtract;
+        case punc("*="):  return Operator::Assign_Multiply;
+        case punc("/="):  return Operator::Assign_Divide;
+        case punc("%="):  return Operator::Assign_Modulo;
+        case punc("**="): return Operator::Assign_Exponentiate;
+        case punc("<<="): return Operator::Assign_ShiftLeft;
+        case punc(">>="): return Operator::Assign_ShiftRight;
+        case punc("~|="): return Operator::Assign_Xor;
+        case punc("&="):  return Operator::Assign_Bitwise_And;
+        case punc("|="):  return Operator::Assign_Bitwise_Or;
     }
     return Operator::None;
 }
@@ -308,70 +383,77 @@ constexpr bool is_op_postfix(Operator op)
 
 // -----------------------------------------------------------------------------
 
-#define TOKEN_TYPE_LIST(DO) \
-    DO(Eof, = 1) \
-    \
-    DO(Keyword) \
-    \
-    DO(Identifier) \
-    DO(String) \
-    DO(Number) \
-    DO(Punctuation)
-
-#define TOKEN_TYPE_DECLARE(type, ...) type __VA_ARGS__,
-
-enum class TokenType {
-    Invalid = 0,
-
-    TOKEN_TYPE_LIST(TOKEN_TYPE_DECLARE)
-};
-
-constexpr std::string_view get_token_type_name(TokenType type)
-{
-    switch (type)
-    {
-#define TOKEN_TYPE_TO_STRING_SWITCH(type, ...) case TokenType::type: return #type;
-        TOKEN_TYPE_LIST(TOKEN_TYPE_TO_STRING_SWITCH)
-        default:
-            raise_error("invalid token type");
-    }
-}
-
 constexpr auto InvalidTokenIndex = ~0u;
 
 struct Token
 {
-    TokenType type = TokenType::Invalid;
-    std::string_view raw;
-    union {
-        struct {
-            std::string_view value;
-        } keyword;
-        struct {
-            bool is_at;
-            std::string_view value;
-        } identifier;
-        struct {
-            bool is_raw;
-            std::string_view value;
-        } string;
-        struct {
-            u32 base;
-            std::string_view raw;
-        } number;
-        struct {
-            std::string_view value;
-            u32 matching = InvalidTokenIndex;
-        } punctuation;
-    };
+    TokenType type = TokenTypes::Invalid;
+    u32 value;
 };
 
-constexpr auto InvalidToken = Token { .type = TokenType::Invalid };
-constexpr auto EofToken = Token { .type = TokenType::Eof };
+inline
+std::string token_to_string(Constants& constants, Token token)
+{
+    switch (token.type) {
+        case TokenTypes::Eof:
+            return "Eof";
+        case TokenTypes::Identifier:
+            return std::format("Identifier({})", constants.identifiers.from_id(token.value));
+        case TokenTypes::String:
+            return std::format("String({})", constants.strings.from_id(token.value));
+        case TokenTypes::Number:
+            return std::format("Number({})", constants.numbers.from_id(token.value));
+        case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
+            return std::format("Keyword({})", get_keyword_str(token.type));
+        case TokenTypes::Punc_First...TokenTypes::Punc_Last:
+            return std::format("Punc({})", get_punc_str(token.type));
+        default:
+            raise_error("invalid token type ({})", std::to_underlying(token.type));
+    }
+}
+
+constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
+constexpr auto EofToken = Token { .type = TokenTypes::Eof };
+
+inline
+bool token_has_value(TokenType type)
+{
+    switch (type) {
+        case TokenTypes::Identifier:
+        case TokenTypes::String:
+        case TokenTypes::Number:
+        case punc("["):
+        case punc("("):
+        case punc("{"):
+        case punc("\\{"):
+        case punc("\\id{"):
+            return true;
+        default:
+            return false;
+    }
+}
 
 struct TokenList
 {
-    std::vector<Token> tokens;
+    Constants* constants;
+    std::vector<u32> tokens;
+
+    usz size_in_bytes()
+    {
+        return tokens.size();
+    }
+
+    void append(Token token)
+    {
+        if (token_has_value(token.type)) {
+            auto offset = tokens.size();
+            tokens.resize(offset + 5);
+            tokens[offset] = std::to_underlying(token.type);
+            std::memcpy(tokens.data() + offset + 1, &token.value, 4);
+        } else {
+            tokens.emplace_back(std::to_underlying(token.type));
+        }
+    }
 
     struct TokenIterator begin() const;
 
@@ -392,17 +474,25 @@ struct TokenIterator
     bool is_at_end() const { return current >= list->tokens.size();            }
     u32      index() const { return is_at_end() ? InvalidTokenIndex : current; }
 
-    void decrement()
+    Token get_token_at(u32 offset) const
     {
-        if (current > 0) {
-            current--;
+        TokenType type = TokenType(list->tokens[offset]);
+        if (token_has_value(type)) {
+            Token token{ .type = type };
+            std::memcpy(&token.value, list->tokens.data() + offset + 1, 4);
+            return token;
+        } else {
+            return Token{ .type = type };
+        }
+    }
 
-#if LANG_NOISY_TOKEN_ITERATOR
-            if (_peeked) {
-                log_trace("token.decrement");
-                _peeked = false;
-            }
-#endif
+    u32 next_offset() const
+    {
+        TokenType type = TokenType(list->tokens[current]);
+        if (token_has_value(type)) {
+            return current + 5;
+        } else {
+            return current + 1;
         }
     }
 
@@ -414,15 +504,17 @@ struct TokenIterator
         }
         _peeked = is_at_end();
 #endif
-        return is_at_end() ? EofToken : list->tokens[current++];
+        auto token = is_at_end() ? EofToken : get_token_at(current);
+        current = next_offset();
+        return token;
     }
 
     Token peek() const
     {
-        auto token = is_at_end() ? EofToken : list->tokens[current];
+        auto token = is_at_end() ? EofToken : get_token_at(current);
 #if LANG_NOISY_TOKEN_ITERATOR
         if (!_peeked) {
-            log_trace("token.peek '{}'", token.raw);
+            log_trace("peek {}", token_to_string(*list->constants, token));
             _peeked = true;
         }
 #endif
@@ -431,48 +523,35 @@ struct TokenIterator
 
     Token peek_next() const
     {
-        auto next = current + 1;
-        auto token = next >= list->tokens.size() ? EofToken : list->tokens[next];
+        auto next = next_offset();
+        auto token = next >= list->tokens.size() ? EofToken : get_token_at(next);
 #if LANG_NOISY_TOKEN_ITERATOR
-        log_trace("token.peek_next '{}'", token.raw);
+        log_trace("peek_next {}", token_to_string(*list->constants, token));
 #endif
         return token;
     }
-
-    Token peek_prev() const
-    {
-        auto token = current == 0 ? EofToken : TokenIterator(list, current - 1).peek();
-#if LANG_NOISY_TOKEN_ITERATOR
-        log_trace("token.peek_prev '{}'", token.raw);
-#endif
-        return token;
-    }
-
-    union Internal {
-        std::monostate _{};
-        Token token;
-        Internal(): _{} { }
-    } _internal;
-          Token    operator *()      { return is_at_end() ? EofToken : list->tokens[current]; }
-    const Token*   operator->()      { _internal.token = **this; return &_internal.token; }
-    TokenIterator& operator++()      { current++; return *this; }
-    TokenIterator& operator--()      { current--; return *this; };
-    TokenIterator  operator++(int)   { auto copy = *this; current++; return copy; }
-    TokenIterator  operator--(int)   { auto copy = *this; current--; return copy; }
-    TokenIterator  operator +(i32 o) { return {list, current + u32(o)}; };
-    TokenIterator  operator -(i32 o) { return {list, current - u32(o)}; };
-
-    bool operator==(const TokenIterator& other) const { return index() == other.index(); };
-    operator bool() const { return !is_at_end(); }
 };
 
 inline
 TokenIterator TokenList::matching_pair_for(Token token) const
-    {
-        if (token.type != TokenType::Punctuation) return TokenIterator{this, InvalidTokenIndex};
-        auto i = token.punctuation.matching;
-        return TokenIterator{this, i};
+{
+    switch (token.type) {
+        case punc("("):
+        case punc("["):
+        case punc("{"):
+        case punc("\\{"):
+        case punc("\\id{"):
+        case punc(")"):
+        case punc("]"):
+        case punc("}"):
+        {
+            auto i = token.value;
+            return TokenIterator{this, i};
+        }
+        default:
+            return TokenIterator{this, InvalidTokenIndex};
     }
+}
 
 inline
 TokenIterator TokenList::begin() const
@@ -482,55 +561,19 @@ TokenIterator TokenList::begin() const
 
 constexpr bool is_end_of_expression_token(Token token)
 {
-    switch (make_opstr(RuntimeLangString(token.raw))) {
-        case make_opstr(")"):
-        case make_opstr("}"):
-        case make_opstr("]"):
-        case make_opstr(";"):
-        case make_opstr(","):
+    switch (token.type) {
+        case punc(")"):
+        case punc("}"):
+        case punc("]"):
+        case punc(";"):
+        case punc(","):
             return true;
         default:
             return false;
     }
 }
 
-TokenList scan(std::string_view);
-
-// -----------------------------------------------------------------------------
-
-template<typename T>
-struct Dedup
-{
-    ankerl::unordered_dense::map<T, u32> lookup;
-    std::vector<T> cache;
-
-    usz total_lookups = 0;
-
-    u32 get_id(T item)
-    {
-        total_lookups++;
-        auto iter = lookup.find(item);
-        if (iter == lookup.end()) {
-            auto index = cache.size();
-            cache.emplace_back(item);
-            lookup[item] = index;
-            return index;
-        } else {
-            return iter->second;
-        }
-    }
-
-    T from_id(u32 id)
-    {
-        return cache[id];
-    }
-};
-
-struct Constants
-{
-    Dedup<std::string_view> strings;
-    Dedup<f64> numbers;
-};
+void scan(TokenList& out, Constants& constants, std::string_view source);
 
 // -----------------------------------------------------------------------------
 
@@ -926,12 +969,12 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
                 PRINT("{}", get_ast_header_name(header));
                 break;
             case AstHeader::FieldAccess:
-                PRINT("FieldAccess({})", constants.strings.from_id(ip[1]));
+                PRINT("FieldAccess({})", constants.identifiers.from_id(ip[1]));
                 print_node(ip[2], depth + 1);
                 // compacted.write(ip[1]);
                 break;
             case AstHeader::Identifier:
-                PRINT("Identifier({})", constants.strings.from_id(ip[1]));
+                PRINT("Identifier({})", constants.identifiers.from_id(ip[1]));
                 // compacted.write(ip[1]);
                 break;
 // -----------------------------------------------------------------------------
@@ -1056,7 +1099,7 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
     Ast compacted;
     ast_compact(constants, ast, offset, compacted);
 
-#if 1
+#if 0
     log_debug("Linked");
     ast_print_flat(constants, ast);
 
@@ -1064,8 +1107,10 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
     ast_print_flat(constants, compacted);
 #endif
 
+#if 1
     log_debug("Tree");
     ast_print_tree(constants, ast, offset);
+#endif
 
     static std::vector<std::byte> storage;
     auto test_calculate_compressed_size = [&](const void* data, size_t size)
@@ -1076,8 +1121,9 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
 
     auto compress_size = test_calculate_compressed_size(source.data(), source.size());
 
-    log_debug("unique strings = {} / {} ({:.2f}x)", constants.strings.cache.size(), constants.strings.total_lookups, f64(constants.strings.total_lookups) / constants.strings.cache.size());
-    log_debug("unique numbers = {} / {} ({:.2f}x)", constants.numbers.cache.size(), constants.numbers.total_lookups, f64(constants.numbers.total_lookups) / constants.numbers.cache.size());
+    log_debug("unique identifiers = {} / {} ({:.2f}x)", constants.identifiers.unique_count(), constants.identifiers.total_lookups, f64(constants.identifiers.total_lookups) / constants.identifiers.unique_count());
+    log_debug("unique strings     = {} / {} ({:.2f}x)", constants.strings.unique_count(), constants.strings.total_lookups, f64(constants.strings.total_lookups) / constants.strings.unique_count());
+    log_debug("unique numbers     = {} / {} ({:.2f}x)", constants.numbers.unique_count(), constants.numbers.total_lookups, f64(constants.numbers.total_lookups) / constants.numbers.unique_count());
 
     log_trace("            source = {}", byte_size_to_string(source.size()));
     log_trace(" compressed source = {}", byte_size_to_string(compress_size));
