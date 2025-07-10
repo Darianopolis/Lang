@@ -3,7 +3,7 @@
 #include <filesystem>
 
 #include <lang/core.hpp>
-#include <lang/lang.hpp>
+#include <lang/ast.hpp>
 
 #include <simdutf.h>
 
@@ -13,6 +13,7 @@ int main()
 {
     // auto message = read_file("test/small.lang");
     // auto message = read_file("test/large.lang");
+    // auto message = read_file("test/test.lang");
 
     // auto message = read_file("test/vulkan_test.lang");
 
@@ -214,8 +215,12 @@ x :: 123;
     for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
         auto token = iter.peek();
         auto matched = tokens.matching_pair_for(token);
-        if (!matched.is_at_end() && matched.index() < iter.index()) {
-            indent--;
+
+        switch (token.type) {
+            case punc(")"):
+            case punc("]"):
+            case punc("}"):
+                indent--;
         }
 
         auto message = std::format("{:7} ", iter.index());
@@ -225,7 +230,7 @@ x :: 123;
         message += token_to_string(constants, token);
         std::println("{}", message);
 
-        if (!matched.is_at_end() && matched.index() > iter.index()) {
+        if (!matched.is_at_end()) {
             indent++;
         }
     }
