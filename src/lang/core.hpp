@@ -79,9 +79,14 @@ struct Defer
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-#define text_ansi_color_begin(color) "\u001B[" #color "m"
-#define text_ansi_color_reset "\u001B[0m"
-#define text_ansi_color(color, text) text_ansi_color_begin(color) text text_ansi_color_reset
+#define VT_color_begin(color) "\u001B[" #color "m"
+#define VT_color_reset "\u001B[0m"
+#define VT_color(color, text) VT_color_begin(color) text VT_color_reset
+
+#define VT_save_cursor "\0337"
+#define VT_restore_cursor "\0338"
+#define VT_move_prev_line "\033[F"
+#define VT_move_down "\033[B"
 
 enum class LogLevel
 {
@@ -119,35 +124,35 @@ template<typename ...Args>
 void log_trace(std::format_string<Args...> fmt, Args&&... args)
 {
     if (log_level > LogLevel::Trace) return;
-    std::println("[" text_ansi_color(90, "TRACE") "] " text_ansi_color(90, "{}"), std::vformat(fmt.get(), std::make_format_args(args...)));
+    std::println("[" VT_color(90, "TRACE") "] " VT_color(90, "{}"), std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_debug(std::format_string<Args...> fmt, Args&&... args)
 {
     if (log_level > LogLevel::Debug) return;
-    std::println("[" text_ansi_color(96, "DEBUG") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
+    std::println("[" VT_color(96, "DEBUG") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_info(std::format_string<Args...> fmt, Args&&... args)
 {
     if (log_level > LogLevel::Info) return;
-    std::println(" [" text_ansi_color(94, "INFO") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
+    std::println(" [" VT_color(94, "INFO") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_warn(std::format_string<Args...> fmt, Args&&... args)
 {
     if (log_level > LogLevel::Warn) return;
-    std::println(" [" text_ansi_color(93, "WARN") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
+    std::println(" [" VT_color(93, "WARN") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 template<typename ...Args>
 void log_error(std::format_string<Args...> fmt, Args&&... args)
 {
     if (log_level > LogLevel::Error) return;
-    std::println("[" text_ansi_color(91, "ERROR") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
+    std::println("[" VT_color(91, "ERROR") "] {}", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
 
 // -----------------------------------------------------------------------------
@@ -235,6 +240,17 @@ T unix_check_(T res, UnixErrorBehaviour check, auto... allowed)
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
+
+// template<typename T, usz Size, usz Alignment = 16>
+// struct AlignedStorage
+// {
+//     using Type = T;
+
+//     alignas(Alignment) std::byte data[Size];
+// };
+
+// #define get_impl(storage) reinterpret_cast<decltype(storage)::Type*>(_storage.data)
+// #define decl_self(storage) auto* self = get_impl(storage)
 
 struct RefCounted
 {

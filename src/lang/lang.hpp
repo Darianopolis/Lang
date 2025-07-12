@@ -31,36 +31,18 @@ struct Error
     u32 line;
     u32 file_offset;
     std::string message;
+
+    void print(std::string_view source);
 };
 
 struct ErrorList
 {
     std::vector<Error> errors;
 
-    void clear()
-    {
-        errors.clear();
-    }
-
-    bool any_errors() const
-    {
-        return !errors.empty();
-    }
-
-    void print_errors(std::string_view source)
-    {
-        // TODO: Convert tabs to spaces and adjust visual columns accordingly
-
-        for (auto& error : errors) {
-            auto line_str = get_containing_line(source, error.file_offset);
-            log_error("{:5} | {}", error.line, line_str);
-
-            std::string indent(error.file_offset - (line_str.data() - source.data()), ' ');
-            log_error("      | {}" text_ansi_color(93, "^~") , indent);
-
-            log_error("      | {}", error.message);
-        }
-    }
+    void clear() { errors.clear(); }
+    bool any_errors() const { return !errors.empty(); }
+    auto begin() { return errors.begin(); }
+    auto end() { return errors.end(); }
 };
 
 // -----------------------------------------------------------------------------
@@ -149,6 +131,7 @@ constexpr std::array Keywords
     "struct", "enum",
     "and", "or",
     "undefined", "null",
+    "fn",
 
     "@as", "@typeOf",
 };
@@ -312,7 +295,39 @@ constexpr auto InvalidTokenIndex = ~0u;
 struct Token
 {
     TokenType type = TokenTypes::Invalid;
-    u32 value;
+    u32 line;
+    u32 file_offset;
+
+    struct Identifier {
+        std::string_view value;
+
+        constexpr bool operator==(const Identifier&) const noexcept = default;
+    };
+
+    struct String {
+        std::string_view value;
+        bool is_temporary;
+
+        constexpr bool operator==(const String&) const noexcept = default;
+    };
+
+    struct Number {
+        std::string_view value;
+        u8 base;
+
+        constexpr bool operator==(const Number&) const noexcept = default;
+    };
+
+    union {
+        Identifier identifier = {};
+        String string;
+        Number number;
+    };
+
+    operator bool() const noexcept
+    {
+        return type != TokenTypes::Eof && type != TokenTypes::Invalid;
+    }
 };
 
 #define TOKEN_CloseBracketCases \
@@ -328,26 +343,10 @@ struct Token
     case punc("\\{"): \
     case punc("\\id{") \
 
-inline
-TokenType get_matching_bracket_token_type(TokenType type)
-{
-    switch (type) {
-        case punc("["): return punc("]");
-        case punc("("): return punc(")");
-        case punc("{"): return punc("}");
-        case punc("${"): return punc("}");
-        case punc("\\{"): return punc("}");
-        case punc("\\id{"): return punc("}");
-        default:
-            raise_error("get_matching_bracket_token_type :: unknown {}", std::to_underlying(type));
-    }
-}
-
 #define TOKEN_HasValueCases \
     case TokenTypes::Identifier: \
     case TokenTypes::String: \
-    case TokenTypes::Number: \
-    TOKEN_OpenBracketCases \
+    case TokenTypes::Number
 
 inline
 bool token_has_value(TokenType type)
@@ -361,25 +360,21 @@ bool token_has_value(TokenType type)
 }
 
 inline
-std::string token_to_string(Constants& constants, Token token)
+std::string token_to_string(Token token)
 {
     switch (token.type) {
         case TokenTypes::Eof:
             return "Eof";
         case TokenTypes::Identifier:
-            return std::format("Identifier({})", constants.identifiers.from_id(token.value));
+            return std::format("Identifier({})", token.identifier.value);
         case TokenTypes::String:
-            return std::format("String({})", constants.strings.from_id(token.value));
+            return std::format("String({})", token.string.value);
         case TokenTypes::Number:
-            return std::format("Number({})", constants.numbers.from_id(token.value));
+            return std::format("Number<{}>({})", token.number.base, token.number.value);
         case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
             return std::format("Keyword({})", get_keyword_str(token.type));
         case TokenTypes::Punc_First...TokenTypes::Punc_Last:
-            if (token_has_value(token.type)) {
-                return std::format("Punc({}, {})", get_punc_str(token.type), token.value);
-            } else {
                 return std::format("Punc({})", get_punc_str(token.type));
-            }
         default:
             raise_error("invalid token type ({})", std::to_underlying(token.type));
     }
@@ -400,162 +395,18 @@ constexpr bool is_end_of_expression_token(Token token)
 constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
 constexpr auto EofToken = Token { .type = TokenTypes::Eof };
 
-struct Line
-{
-    // u32 file_offset = 0;
-    u32 first_token_file_offset = 0;
-    u32 first_token = InvalidTokenIndex;
+struct Scanner {
+    struct Impl;
+    static Scanner* create();
+    static void destroy(Scanner*);
+
+private:
+    Scanner() = default;
+
+public:
+    bool init(ErrorList& errors, std::string_view source);
+    Token next();
 };
-
-struct TokenList
-{
-    Constants* constants;
-    std::vector<u32> tokens;
-    std::vector<Line> lines;
-
-    void clear()
-    {
-        tokens.clear();
-        lines.clear();
-    }
-
-    usz size_in_bytes()
-    {
-        return tokens.size();
-    }
-
-    void append(Token token)
-    {
-        if (token_has_value(token.type)) {
-            auto offset = tokens.size();
-            tokens.resize(offset + 5);
-            tokens[offset] = std::to_underlying(token.type);
-            std::memcpy(tokens.data() + offset + 1, &token.value, 4);
-        } else {
-            tokens.emplace_back(std::to_underlying(token.type));
-        }
-    }
-
-    struct TokenIterator begin() const;
-
-    TokenIterator matching_pair_for(Token token) const;
-
-    u32 find_line_for_pos(u32 pos)
-    {
-        // TODO: Binary search
-        for (usz i = lines.size(); i--;) {
-            if (lines[i].first_token_file_offset <= pos) {
-                return i;
-            }
-        }
-        raise_error("impossible");
-    }
-
-    u32 find_line_for_token(u32 token_index)
-    {
-        // TODO: Binary search
-        for (usz i = lines.size(); i--;) {
-            if (lines[i].first_token <= token_index) {
-                return i;
-            }
-        }
-        raise_error("impossible");
-    }
-};
-
-#define LANG_NOISY_TOKEN_ITERATOR 0
-
-struct TokenIterator
-{
-    const TokenList* list;
-    u32 current;
-
-#if LANG_NOISY_TOKEN_ITERATOR
-    mutable bool _peeked = false;
-#endif
-
-    bool is_at_end() const { return current >= list->tokens.size();            }
-    u32      index() const { return is_at_end() ? InvalidTokenIndex : current; }
-
-    Token get_token_at(u32 offset) const
-    {
-        TokenType type = TokenType(list->tokens[offset]);
-        if (token_has_value(type)) {
-            Token token{ .type = type };
-            std::memcpy(&token.value, list->tokens.data() + offset + 1, 4);
-            return token;
-        } else {
-            return Token{ .type = type };
-        }
-    }
-
-    u32 next_offset() const
-    {
-        TokenType type = TokenType(list->tokens[current]);
-        if (token_has_value(type)) {
-            return current + 5;
-        } else {
-            return current + 1;
-        }
-    }
-
-    Token advance()
-    {
-#if LANG_NOISY_TOKEN_ITERATOR
-        if (!_peeked) {
-            peek();
-        }
-        _peeked = is_at_end();
-#endif
-        auto token = is_at_end() ? EofToken : get_token_at(current);
-        current = next_offset();
-        return token;
-    }
-
-    Token peek() const
-    {
-        auto token = is_at_end() ? EofToken : get_token_at(current);
-#if LANG_NOISY_TOKEN_ITERATOR
-        if (!_peeked) {
-            log_trace("peek {}", token_to_string(*list->constants, token));
-            _peeked = true;
-        }
-#endif
-        return token;
-    }
-
-    Token peek_next() const
-    {
-        auto next = next_offset();
-        auto token = next >= list->tokens.size() ? EofToken : get_token_at(next);
-#if LANG_NOISY_TOKEN_ITERATOR
-        log_trace("peek_next {}", token_to_string(*list->constants, token));
-#endif
-        return token;
-    }
-};
-
-inline
-TokenIterator TokenList::matching_pair_for(Token token) const
-{
-    switch (token.type) {
-        TOKEN_OpenBracketCases:
-        {
-            auto i = token.value;
-            return TokenIterator{this, i};
-        }
-        default:
-            return TokenIterator{this, InvalidTokenIndex};
-    }
-}
-
-inline
-TokenIterator TokenList::begin() const
-{
-    return TokenIterator{this, 0};
-}
-
-void scan(TokenList& out, Constants& constants, ErrorList& errors, std::string_view source);
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -648,6 +499,7 @@ constexpr std::string_view get_expr_mode_name(ExpressionMode mode)
     switch (mode) {
         case ExpressionMode::Normal: return "Normal";
         case ExpressionMode::TypeAnnotation: return "TypeAnnotation";
+        default: raise_error("invalid expr mode enum value: {}", std::to_underlying(mode));
     }
 }
 
@@ -966,7 +818,7 @@ struct AstListBuilder
     }
 };
 
-AstOffset parse(Ast& out, TokenList& tokens, Constants& constants);
+AstOffset parse(Ast& out, Scanner* scanner, Constants& constants);
 
 void ast_print_flat(Constants& constants, Ast& ast);
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);

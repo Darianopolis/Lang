@@ -16,32 +16,43 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
 {
     // log_trace("testing: {}", input);
 
-    TokenList tokens;
     ErrorList errors;
 
-    scan(tokens, constants, errors, input);
+    auto scanner = Scanner::create();
+    defer { Scanner::destroy(scanner); };
 
-    if (errors.any_errors()) {
-        errors.print_errors(input);
-        return TestResult::Failed;
-    }
+    scanner->init(errors, input);
 
     u32 i = 0;
-    for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
+    while (auto token = scanner->next()) {
         if (i >= expected.size()) {
             log_error("test_scan :: expected {} tokens, got at least {}", expected.size(), i + 1);
             return TestResult::Failed;
         }
-        if (iter.peek().type != expected[i].type || iter.peek().value != expected[i].value) {
-            log_error("test_scan :: [{}] expected {} got {}", i, token_to_string(constants, expected[i]), token_to_string(constants, iter.peek()));
+        bool not_equal = token.type != expected[i].type;
+        if (!not_equal) {
+            switch (token.type) {
+                case TokenTypes::Identifier: not_equal = token.identifier   != expected[i].identifier;   break;
+                case TokenTypes::String:     not_equal = token.string.value != expected[i].string.value; break;
+                case TokenTypes::Number:     not_equal = token.number       != expected[i].number;       break;
+            }
+        }
+        if (not_equal) {
+            log_error("test_scan :: [{}] expected {} got {}", i, token_to_string(expected[i]), token_to_string(token));
             return TestResult::Failed;
         }
         i++;
     }
 
+    if (errors.any_errors()) {
+        for (auto err : errors) err.print(input);
+        return TestResult::Failed;
+    }
+
     if (!expected_ast.empty()) {
         Ast ast;
-        auto offset = parse(ast, tokens, constants);
+        scanner->init(errors, input);
+        auto offset = parse(ast, scanner, constants);
         Ast compacted;
         ast_compact(constants, ast, offset, compacted);
         u32 max = std::min(compacted.code.size(), expected_ast.size());
@@ -57,22 +68,24 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
     return TestResult::Success;
 }
 
-TestResults test_full_parse(Constants& constants, std::string_view input)
+TestResults test_negatives()
 {
-    TokenList tokens;
-    ErrorList errors;
+    /*
 
-    scan(tokens, constants, errors, input);
-    if (errors.any_errors()) {
-        errors.print_errors(input);
-        return TestResult::Failed;
-    }
+    error_reporting
+        how to test that caret position for lines containing tabs and unicode characters is correct?
 
-    Ast ast;
-    auto offset = parse(ast, tokens, constants);
-    ast_print_details(constants, ast, offset, input);
+    strings
+        escapes
+            invalid
+        unicode escapes
+            too long
+            too large
+            surrogate
 
-    return TestResult::Success;
+    */
+
+    return TestResult::Skipped;
 }
 
 TestResults test_positives()
@@ -81,17 +94,18 @@ TestResults test_positives()
 
     Constants constants;
 
-    auto sym =    [&](std::string_view type, u32 value = {}) consteval -> Token { return {punc(type), value};                                           };
-    auto sym_rt = [&](std::string_view type, u32 value = {})           -> Token { return {punc_runtime(type), value};                                   };
-    auto kyw    = [&](std::string_view type)                           -> Token { return {keyword(type)};                                               };
-    auto kyw_rt = [&](std::string_view type)                           -> Token { return {keyword_runtime(type)};                                       };
-    auto num =    [&](std::string_view value)                          -> Token { return {TokenTypes::Number, constants.numbers.get_id(value)};         };
-    auto str =    [&](std::string_view value)                          -> Token { return {TokenTypes::String, constants.strings.get_id(value)};         };
-    auto id =     [&](std::string_view value)                          -> Token { return {TokenTypes::Identifier, constants.identifiers.get_id(value)}; };
+    auto sym = [&](std::string_view type) consteval -> Token { return {punc(type)};                                            };
+    auto kyw = [&](std::string_view type)           -> Token { return {keyword(type)};                                         };
+    auto num = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 10}}};     };
+    auto bin = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 2}}};      };
+    auto oct = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 8}}};      };
+    auto hex = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 16}}};     };
+    auto str = [&](std::string_view value)          -> Token { return {TokenTypes::String, 0, 0, {.string = {value}}};         };
+    auto id  = [&](std::string_view value)          -> Token { return {TokenTypes::Identifier, 0, 0, {.identifier = {value}}}; };
 
-    auto _num = [&](std::string_view val) { return constants.numbers.get_id(val);     };
-    auto _id =  [&](std::string_view val) { return constants.identifiers.get_id(val); };
-    auto ast  = [&](AstHeader header)     { return std::to_underlying(header);        };
+    auto _num =  [&](std::string_view val) { return constants.numbers.get_id(val);     };
+    auto _id =   [&](std::string_view val) { return constants.identifiers.get_id(val); };
+    auto ast  =  [&](AstHeader header)     { return std::to_underlying(header);        };
 
     TestResults res;
 
@@ -109,20 +123,20 @@ TestResults test_positives()
 
     // keywords
     res += test_scan_parse(constants, "for 0..12 -> (x) {}",
-        { kyw("for"), num("0"), sym(".."), num("12"), sym("->"), sym("(", 23), id("x"), sym(")"), sym("{", 29), sym("}")});
+        { kyw("for"), num("0"), sym(".."), num("12"), sym("->"), sym("("), id("x"), sym(")"), sym("{"), sym("}")});
 
     // strings
-    res += test_scan_parse(constants, R"( 'raw"'""'"raw' )", { str("'\"\"'")     });
-    res += test_scan_parse(constants, R"( "foo bar\" " )",   { str("foo bar\" ") });
-    res += test_scan_parse(constants, R"( "\u{1f525}" )",    { str("🔥")         });
+    res += test_scan_parse(constants, R"( 'raw"'""'"raw' )",                 { str("'\"\"'")                            });
+    res += test_scan_parse(constants, R"( "foo bar\" " )",                   { str("foo bar\" ")                        });
+    res += test_scan_parse(constants, R"( "before" "🔥\u{1f525}" "after" )", { str("before"), str("🔥🔥"), str("after") });
 
     // numbers
-    res += test_scan_parse(constants, "0.1e+2",       { num("0.1e+2")      });
-    res += test_scan_parse(constants, "0x4f.f12p-4",  { num("0x4f.f12p-4") });
-    res += test_scan_parse(constants, "0o777#foo ba", { num("0o777")       });
-    res += test_scan_parse(constants, "0123",         { num("0123")        });
-    res += test_scan_parse(constants, "0b01101",      { num("0b01101")     });
-    res += test_scan_parse(constants, "10'000'000",   { num("10'000'000")  });
+    res += test_scan_parse(constants, "0.1e+2",       { num("0.1e+2")     });
+    res += test_scan_parse(constants, "0x4f.f12p-4",  { hex("4f.f12p-4")  });
+    res += test_scan_parse(constants, "0o777#foo ba", { oct("777")        });
+    res += test_scan_parse(constants, "0123",         { num("0123")       });
+    res += test_scan_parse(constants, "0b01101",      { bin("01101")      });
+    res += test_scan_parse(constants, "10'000'000",   { num("10'000'000") });
 
     // comments
     res += test_scan_parse(constants, "# 0123",             {            });
@@ -132,7 +146,7 @@ TestResults test_positives()
     {
         TestResults tmp;
         for (auto& k : Keywords) {
-            tmp += test_scan_parse(constants, k, { kyw_rt(k) });
+            tmp += test_scan_parse(constants, k, { {keyword_runtime(k)} });
         }
         res += tmp.collapse();
     }
@@ -141,20 +155,7 @@ TestResults test_positives()
     {
         TestResults tmp;
         for (auto& _p : PunctuationSequences) {
-            auto type = punc_runtime(_p);
-            switch (type) {
-                TOKEN_CloseBracketCases:
-                    // handled by following
-                    break;
-                TOKEN_OpenBracketCases:
-                    res += test_scan_parse(constants,
-                        std::format("{} {}", _p, get_token_type_name(get_matching_bracket_token_type(type))),
-                        { sym_rt(_p, 5), {get_matching_bracket_token_type(type)} });
-                    break;
-
-                default:
-                    tmp += test_scan_parse(constants, _p, { {punc_runtime(_p)} });
-            }
+            tmp += test_scan_parse(constants, _p, { {punc_runtime(_p)} });
         }
         res += tmp.collapse();
     }
@@ -166,7 +167,6 @@ TestResults scan_fuzz()
 {
     Constants constants;
     ErrorList errors;
-    TokenList tokens;
 
     auto seed = std::random_device{}();
 
@@ -184,6 +184,9 @@ TestResults scan_fuzz()
     std::vector<char32_t> generated_utf32;
     std::string input;
 
+    auto* scanner = Scanner::create();
+    defer { Scanner::destroy(scanner); };
+
     for (u32 iteration = 0; iteration < Iterations; ++iteration) {
 
         generated_utf32.clear();
@@ -195,8 +198,7 @@ TestResults scan_fuzz()
             if (value > 0xD7FF && value < 0xE000) continue; // surrogates
             if (value < 32) {
                 // control characters
-                // TODO: Support tabs
-                if (value != '\n' /*  && value != '\t' */) continue;
+                if (value != '\n' && value != '\t') continue;
             }
             if (value == 127) continue; // delete
 
@@ -217,17 +219,17 @@ TestResults scan_fuzz()
         errors.clear();
         {
             // LogLevelGuard _{LogLevel::Fatal};
-            scan(tokens, constants, errors, input);
+            scanner->init(errors, input);
+            while (scanner->next());
         }
-        // if (errors.any_errors()) {
-        //     errors.print_errors(input);
-        // }
+        // for (auto err : errors) err.print(input);
     }
 
     return TestResult::Success;
 }
 
-Registered _1 = register_test("scan.test", test_positives);
-Registered _2 = register_test("scan.fuzz", scan_fuzz);
+Registered _1 = register_test("scan.positive", test_positives);
+Registered _2 = register_test("scan.negative", test_negatives);
+Registered _3 = register_test("scan.fuzz", scan_fuzz);
 
 NAMESPACE_END

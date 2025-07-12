@@ -167,7 +167,7 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
     _depth++; \
     defer { \
         _depth--; \
-        log_trace(text_ansi_color_reset "{}" text_ansi_color_begin(90) "{}", indent_str(_depth, ". "), _func_name); \
+        log_trace(VT_color_reset "{}" VT_color_begin(90) "{}", indent_str(_depth, ". "), _func_name); \
     }
 #else
 #define LANG_PARSER_TRACE_FUNC(...)
@@ -176,22 +176,50 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
 struct Parser
 {
     Constants* constants;
-    TokenIterator iter;
+    Scanner* scanner;
     Ast& ast;
+
+    Token token;
+    bool need_advance = true;
 
 #if LANG_NOISY_PARSER
     i32 _depth = 0;
 #endif
 
+// -------------------------------------------------------------------------
+
+    Token peek()
+    {
+        if (need_advance) {
+            token = scanner->next();
+            need_advance = false;
+        }
+        return token;
+    }
+
+    bool is_at_end()
+    {
+        return peek().type == TokenTypes::Eof;
+    }
+
+    Token advance()
+    {
+        auto value = peek();
+        need_advance = true;
+        return value;
+    }
+
+// -------------------------------------------------------------------------
+
     bool is(TokenType type)
     {
-        return iter.peek().type == type;
+        return peek().type == type;
     }
 
     bool match(TokenType type)
     {
         if (is(type)) {
-            iter.advance();
+            advance();
             return true;
         }
         return false;
@@ -199,13 +227,13 @@ struct Parser
 
     void consume(TokenType type, std::string_view message)
     {
-        auto token = iter.advance();
+        auto token = advance();
         if (token.type != type) raise_error("{}, got {}", message, get_token_type_name(token.type));
     }
 
     Token consume_identifier(std::string_view message)
     {
-        auto token = iter.advance();
+        auto token = advance();
         if (!token_type_is_identifier_like(token.type)) raise_error("{}, got {}", message, get_token_type_name(token.type));
         return token;
     }
@@ -296,10 +324,10 @@ struct Parser
     }
 
 #define PARSE_MaybeBlockExpr \
-    case keyword("if"):    iter.advance(); return finish_if(); \
-    case keyword("for"):   iter.advance(); return finish_for(); \
-    case keyword("while"): iter.advance(); return finish_while(); \
-    case punc("{"):        iter.advance(); return finish_block(); \
+    case keyword("if"):    advance(); return finish_if(); \
+    case keyword("for"):   advance(); return finish_for(); \
+    case keyword("while"): advance(); return finish_while(); \
+    case punc("{"):        advance(); return finish_block(); \
     case punc("\\{"): \
         raise_error("TODO"); \
         // return splice();
@@ -308,7 +336,7 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        switch (iter.peek().type) {
+        switch (peek().type) {
             PARSE_MaybeBlockExpr
         }
 
@@ -320,7 +348,7 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         auto expr = maybe_block_expr();
-        if (!expr) raise_error("expected block expression, got {}", get_token_type_name(iter.peek().type));
+        if (!expr) raise_error("expected block expression, got {}", get_token_type_name(peek().type));
         return expr;
     }
 
@@ -342,7 +370,7 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (iter.is_at_end()) return {{}, true};
+        if (is_at_end()) return {{}, true};
         if (match(punc(";"))) return {{}, false};
 
         // Block expression
@@ -411,7 +439,7 @@ struct Parser
 
         AstListBuilder builder{ast};
 
-        while (iter.peek().type != TokenTypes::Eof) {
+        while (peek().type != TokenTypes::Eof) {
             auto[stmt, is_terminal] = statement();
             if (!stmt) {
                 if (is_terminal) break;
@@ -426,8 +454,8 @@ struct Parser
             }
         }
 
-        if (iter.peek().type != TokenTypes::Eof) {
-            raise_error("expected end of file, got {}", get_token_type_name(iter.peek().type));
+        if (peek().type != TokenTypes::Eof) {
+            raise_error("expected end of file, got {}", get_token_type_name(peek().type));
         }
 
         auto offset = ast.write(AstHeader::File);
@@ -441,11 +469,11 @@ struct Parser
         LANG_PARSER_TRACE_FUNC("");
 
         AstOffset target{};
-        auto ident = iter.peek();
+        auto ident = peek();
         if (ident.type == TokenTypes::Identifier) {
-            iter.advance();
+            advance();
             target = ast.write(AstHeader::Identifier);
-            ast.write(ident.value);
+            ast.write(constants->identifiers.get_id(ident.identifier.value));
         } else if (ident.type != punc(":")) {
             raise_error("expected identifier or ':' to begin parameter");
         }
@@ -466,7 +494,7 @@ struct Parser
         AstListBuilder builder{ast};
 
         for (;;) {
-            if (iter.peek().type == end) break;
+            if (peek().type == end) break;
 
             builder.add(parameter());
 
@@ -483,14 +511,14 @@ struct Parser
         AstListBuilder builder{ast};
 
         for (;;) {
-            if (iter.peek().type == end) break;
+            if (peek().type == end) break;
 
             AstOffset arg;
             if (match(punc("."))) {
                 raise_error("TODO");
-                // auto ident = iter.advance();
+                // auto ident = advance();
                 // if (ident.type != TokenType::Identifier) raise_error("expected parameter name");
-                // if (iter.advance().raw != punc("=")) raise_error("expected '=' after named parameter");
+                // if (advance().raw != punc("=")) raise_error("expected '=' after named parameter");
                 // auto expr = expression();
                 // args.append(new AstCallNamedArgument{{AstNodeType::CallNamedArgument}, ident, expr});
             } else {
@@ -506,17 +534,11 @@ struct Parser
     }
 
     LANG_FORCEINLINE
-    AstOffset maybe_function()
+    AstOffset finish_function()
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        if (iter.peek().type != punc("(")) return {};
-
-        auto matched = iter.list->matching_pair_for(iter.peek());
-        if (matched.peek_next().type != punc("->")) return {};
-        // if (matched.peek_next().raw != punc("->") && matched.peek_next().raw != "{") return {};
-
-        iter.advance();
+        consume(punc("("), "expected '(' to begin function parameters");
 
         // Function
         auto params = parameters(punc(")"));
@@ -547,7 +569,7 @@ struct Parser
 
     //     AstNodeListBuilder stmts;
 
-    //     while (!iter.is_at_end() && iter.peek().raw != lang_str(punc("}"))) {
+    //     while (!iter.is_at_end() && peek().raw != lang_str(punc("}"))) {
     //         auto[stmt, is_terminal] = statement();
     //         if (!stmt) continue;
     //         stmts.append(stmt);
@@ -631,7 +653,7 @@ struct Parser
 
     // AstTokenSequence* token_sequence()
     // {
-    //     auto open = iter.advance();
+    //     auto open = advance();
 
     //     AstNodeListBuilder builder;
 
@@ -641,11 +663,11 @@ struct Parser
     //         } else if (is("\\id{")) {
     //             builder.append(splice_identifier());
     //         } else {
-    //             builder.append(new AstTokenBasic{{AstNodeType::TokenBasic}, iter.advance()});
+    //             builder.append(new AstTokenBasic{{AstNodeType::TokenBasic}, advance()});
     //         }
     //     }
 
-    //     iter.advance();
+    //     advance();
 
     //     return new AstTokenSequence{{AstNodeType::TokenSequence}, builder.to_list()};
     // }
@@ -671,11 +693,11 @@ struct Parser
     LANG_FORCEINLINE
     AstOffset named_identifier_unchecked()
     {
-        auto token = iter.advance();
+        auto token = advance();
         auto offset = ast.write(AstHeader::Identifier);
         if (token.type == TokenTypes::Identifier) {
             // pure identifier
-            ast.write(token.value);
+            ast.write(constants->identifiers.get_id(token.identifier.value));
         } else {
             // identifier-like keyword
             ast.write(constants->identifiers.get_id(get_keyword_str(token.type)));
@@ -688,37 +710,40 @@ struct Parser
     {
         LANG_PARSER_TRACE_FUNC("");
 
-        auto next = iter.peek();
+        auto next = peek();
         switch (next.type) {
             PARSE_MaybeBlockExpr
             case keyword("true"):
-                iter.advance();
+                advance();
                 return ast.write(AstHeader::Literal_True);
             case keyword("false"):
-                iter.advance();
+                advance();
                 return ast.write(AstHeader::Literal_False);
             case keyword("enum"):
-                iter.advance();
+                advance();
                 raise_error("TODO");
                 // return finish_enum();
             case keyword("struct"):
-                iter.advance();
+                advance();
                 raise_error("TODO");
                 // return finish_struct();
             case keyword("match"):
-                iter.advance();
+                advance();
                 raise_error("TODO");
                 // return finish_match();
             case TokenTypes::Number: {
-                iter.advance();
+                advance();
                 auto offset = ast.write(AstHeader::Literal_Number);
-                ast.write(next.value);
+                ast.write(constants->numbers.get_id(next.number.value));
                 return offset;
             }
             case TokenTypes::String: {
-                iter.advance();
+                advance();
                 auto offset = ast.write(AstHeader::Literal_String);
-                ast.write(next.value);
+                if (next.string.is_temporary) {
+                    raise_error("TODO: Handle interning of escaped strings");
+                }
+                ast.write(constants->strings.get_id(next.string.value));
                 return offset;
             }
             TOKEN_IsIdentifierLikeCases:
@@ -726,17 +751,15 @@ struct Parser
             case punc("${"):
                 raise_error("TODO");
                 // return token_sequence();
+            case keyword("fn"):
+                advance();
+                return finish_function();
             case punc("("):
-                if (auto func = maybe_function()) {
-                    return func;
-                } else {
-                    // Grouping
-                    iter.advance();
-                    auto expr = expression();
-                    consume(punc(")"), "expected ')' to terminate group");
-                    return expr;
-                }
-                break;
+                // Grouping
+                advance();
+                auto expr = expression();
+                consume(punc(")"), "expected ')' to terminate group");
+                return expr;
         }
 
         return {};
@@ -782,7 +805,7 @@ struct Parser
 
         auto lhs = maybe_non_recursive_expression();
         if (!lhs) {
-            auto op_token = iter.advance();
+            auto op_token = advance();
             auto op = get_prefix_op(op_token.type, mode);
             if (op == Operator::None) raise_error("expected valid lhs or prefix operator, got {}", get_token_type_name(op_token.type));
 
@@ -790,7 +813,7 @@ struct Parser
 // -----------------------------------------------------------------------------
             #define X(name, ...) \
                 case Operator::name: { \
-                    if (is_end_of_expression_token(iter.peek())) { \
+                    if (is_end_of_expression_token(peek())) { \
                         lhs = ast.write(AstHeader::name##_Empty); \
                     } else { \
                         auto rhs = expression(op, mode); \
@@ -818,7 +841,7 @@ struct Parser
         }
 
         for (;;) {
-            auto op_token = iter.peek();
+            auto op_token = peek();
 
             auto op = get_other_op(op_token.type, mode);
             if (op == Operator::None) {
@@ -841,7 +864,7 @@ struct Parser
                 break;
             }
 
-            iter.advance();
+            advance();
             if (op == Operator::VarDecl) {
                 // Variable Declaration
                 lhs = finish_var_decl(lhs);
@@ -849,11 +872,11 @@ struct Parser
             } else  if (is_op_postfix(op)) {
                 switch (op) {
                     case Operator::FieldAccess: {
-                        auto field = iter.advance();
+                        auto field = advance();
                         if (field.type != TokenTypes::Identifier)
                             raise_error("expected field following field access operator '.', got {}", get_token_type_name(field.type));
                         auto new_lhs = ast.write(AstHeader::FieldAccess);
-                        ast.write(field.value);
+                        ast.write(constants->identifiers.get_id(field.identifier.value));
                         ast.write(lhs);
                         lhs = new_lhs;
                         break;
@@ -918,9 +941,13 @@ struct Parser
     }
 };
 
-AstOffset parse(Ast& out, TokenList& tokens, Constants& constants)
+AstOffset parse(Ast& out, Scanner* scanner, Constants& constants)
 {
-    Parser parser { &constants, tokens.begin(), out };
+    Parser parser {
+        .constants = &constants,
+        .scanner = scanner,
+        .ast = out
+    };
     auto offset = parser.file();
     return offset;
 }

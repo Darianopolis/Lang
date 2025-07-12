@@ -12,7 +12,7 @@ NAMESPACE_USE(lang)
 void samples()
 {
     // auto message = read_file("test/small.lang");
-    // auto message = read_file("test/large.lang");
+    // auto message = read_file("test/resources/large.lang");
     // auto message = read_file("test/test.lang");
 
     // auto message = read_file("test/vulkan_test.lang");
@@ -38,7 +38,7 @@ for 0..10 -> (x) {
     print(x);
 } else { 0 }
 
-fib :: (n: f64) -> f64 {
+fib :: fn(n: f64) -> f64 {
     defer { print("Hello, world!"); }
     if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 };
@@ -198,34 +198,40 @@ x :: 123;
 
     log_debug("scanning...");
 
-    TokenList tokens;
-    tokens.tokens.reserve(message.size());
+    auto scanner = Scanner::create();
+    defer { Scanner::destroy(scanner); };
+
     Constants constants;
     ErrorList errors;
 
-    auto start = std::chrono::steady_clock::now();
-    scan(tokens, constants, errors, message);
-    auto end = std::chrono::steady_clock::now();
 
 #if 1
     log_debug("tokens");
 
     auto indent_str = ". ";
-    auto indent = 0;
+    i32 indent = 0;
 
-    for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
-        auto token = iter.peek();
+    auto start = std::chrono::steady_clock::now();
+    scanner->init(errors, message);
+
+    usz token_count = 0;
+#if 0
+    while (scanner->next()) token_count++;
+#else
+    while (auto token = scanner->next()) {
+        token_count++;
 
         switch (token.type) {
             TOKEN_CloseBracketCases:
+                if (indent == 0) raise_error("unexpected closing bracket");
                 indent--;
         }
 
-        auto message = std::format("{:7} ", iter.index());
+        auto message = std::format("{:7} ", token.line);
         for (auto i = 0; i < indent; ++i) {
             message += indent_str;
         }
-        message += token_to_string(constants, token);
+        message += token_to_string(token);
         std::println("{}", message);
 
         switch (token.type) {
@@ -234,18 +240,21 @@ x :: 123;
         }
     }
 #endif
+    auto end = std::chrono::steady_clock::now();
+
+    for (auto err : errors) err.print(message);
 
     {
         auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
-        auto size = tokens.tokens.size();
-        log_debug("scanned in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
-        log_debug("tokenlist size = {} ({:.2f}x)", byte_size_to_string(size), f64(size) / message.size());
+        log_debug("scanned {} tokens in {} ({}/s)", token_count, duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
     }
+#endif
 
 #if 1
     start = std::chrono::steady_clock::now();
     Ast ast;
-    auto offset = parse(ast, tokens, constants);
+    scanner->init(errors, message);
+    auto offset = parse(ast, scanner, constants);
     end = std::chrono::steady_clock::now();
 
     {

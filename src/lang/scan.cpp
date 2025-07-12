@@ -44,6 +44,16 @@ bool is_hexadecimal_digit(u8 c)
     }
 }
 
+std::optional<u8> maybe_hex_digit_to_int(u8 c)
+{
+    switch (c) {
+        case '0'...'9': return c - '0';
+        case 'a'...'f': return 10 + c - 'a';
+        case 'A'...'F': return 10 + c - 'A';
+        default:        return std::nullopt;
+    }
+}
+
 #define LANG_PUNCTUATION_CASES \
     case '(': case ')': case '[': case ']': case '{': case '}': \
     case ',': case '.': case '+': case ':': case ';': case '*': \
@@ -64,7 +74,7 @@ bool is_ascii_alphanumeric(u8 c)
 bool is_valid_identifier_start_element(u8 c)
 {
     // NOTE: All unicode values are fair game
-    //       ASCII values are reserved for future compatibility
+    //       all other ASCII values are reserved for future compatibility
     //       Identifier rules should be enforced by linters based on user policy
 
     return c >= 128
@@ -81,54 +91,31 @@ NAMESPACE_END
 
 struct StopScanFlag {};
 
-enum class ScanMode
+struct Scanner::Impl : Scanner
 {
-    Initial,
-    Reparse,
-};
-
-struct Scanner
-{
-    TokenList* token_list;
     ErrorList* errors;
-    Constants* constants;
     std::string_view source;
     usz position;
 
-    ScanMode mode = ScanMode::Initial;
-    u32 target_token_index = 0;
-
+    std::string string_scratch;
     Token token;
+    u32 line = 0;
 
 // -----------------------------------------------------------------------------
 
-    u32 token_index = 0;
-
-    void init()
-    {
-        token_list->lines.emplace_back();
-    }
-
     void new_line(u32 pos)
     {
-        if (mode == ScanMode::Reparse) return;
+        (void)pos;
 
-        token_list->lines.emplace_back(Line {
-            .first_token_file_offset = pos,
-        });
+        line++;
     }
 
     void begin_token()
     {
-        if (mode == ScanMode::Reparse) {
-            if (token_index == target_token_index) throw StopScanFlag{};
-            return;
-        }
-
-        if (token_list->lines.back().first_token == InvalidTokenIndex) {
-            token_list->lines.back().first_token = token_index;
-            token_list->lines.back().first_token_file_offset = position;
-        }
+        token = {
+            .line = line,
+            .file_offset = u32(position),
+        };
     }
 
     template<typename ...Args>
@@ -136,7 +123,8 @@ struct Scanner
     {
         auto message = std::format(fmt, std::forward<Args>(args)...);
         errors->errors.emplace_back(Error {
-            .line = token_list->find_line_for_pos(pos),
+            // TODO: Are we always still on the same line?
+            .line = line,
             .file_offset = pos,
             .message = message,
         });
@@ -151,82 +139,32 @@ struct Scanner
 
 // -----------------------------------------------------------------------------
 
-    struct TokenMatchBegin {
-        u32 token_index;
-        u32 file_offset;
-    };
-    std::vector<TokenMatchBegin> beginning_tokens;
-    void emit_token()
-    {
-        u32 offset = token_list->tokens.size();
-
-        // log_debug("emitting {} index = {}, offset = {}", token_to_string(*constants, token), token_index, offset);
-
-        switch (token.type) {
-            TOKEN_OpenBracketCases:
-            {
-                beginning_tokens.emplace_back(offset, position - 1);
-                break;
-            }
-            TOKEN_CloseBracketCases:
-            {
-                if (beginning_tokens.empty()) {
-                    report_error(position - 1, "unexpected closing bracket, no open brackets");
-                }
-                auto begin_token_type = TokenType(token_list->tokens[beginning_tokens.back().token_index]);
-
-                auto expected = get_matching_bracket_token_type(begin_token_type);
-                if (expected != token.type) {
-                    report_error(position - 1, "mismatched bracket pair - expected '{}' found '{}'",
-                        get_token_type_name(expected), get_token_type_name(token.type));
-                }
-
-                // begin_token.value = offset;
-                std::memcpy(token_list->tokens.data() + beginning_tokens.back().token_index + 1, &offset, 4);
-                token.value = beginning_tokens.back().token_index;
-
-                beginning_tokens.pop_back();
-            }
-        }
-
-        token_list->append(token);
-
-        // log_debug("  after emitting, offset = {}", token_list->tokens.size());
-
-        token_index = token_list->tokens.size();
-    }
-
-    void deinit()
-    {
-        if (!beginning_tokens.empty()) {
-            for (auto& t : beginning_tokens) {
-                report_error_nothrow(t.file_offset, "unclosed bracket");
-            }
-        }
-    }
-
-// -----------------------------------------------------------------------------
-
+    LANG_FORCEINLINE
     bool is_at_end()
     {
         return position >= source.size();
     }
 
+    LANG_FORCEINLINE
     u8 advance()
     {
         return is_at_end() ? '\0' : source[position++];
     }
 
+    LANG_FORCEINLINE
     u8 peek()
     {
         return is_at_end() ? '\0' : source[position];
     }
 
+    LANG_FORCEINLINE
     u8 peek_next()
     {
         auto next = position + 1;
         return (next >= source.size() ? '\0' : source[next]);
     }
+
+// -----------------------------------------------------------------------------
 
     void skip_comment()
     {
@@ -284,11 +222,11 @@ struct Scanner
 
     void read_punctuation()
     {
-        auto type = TokenTypes::Invalid;
-
         begin_token();
 
-        switch (source[position++]) {
+        auto type = TokenTypes::Invalid;
+
+        switch (advance()) {
             case '^': type = punc("^"); break;
             case '(': type = punc("("); break;
             case ')': type = punc(")"); break;
@@ -403,9 +341,7 @@ struct Scanner
                 break;
         }
 
-        token = {
-            .type = type,
-        };
+        token.type = type;
     }
 
     void read_number()
@@ -418,7 +354,7 @@ struct Scanner
         u8 exponent_separator = 'e';
 
         u32 base = 10;
-        // auto num_start = position;
+        auto num_start = position;
 
         // Identify hexadecimal or binary number
         if (peek() == '0') {
@@ -428,19 +364,19 @@ struct Scanner
                     digit_test_ = is_hexadecimal_digit;
                     exponent_separator = 'p';
                     base = 16;
-                    // num_start += 2;
+                    num_start += 2;
                     advance();
                     break;
                 case 'b':
                     digit_test_ = is_binary_digit;
                     base = 2;
-                    // num_start += 2;
+                    num_start += 2;
                     advance();
                     break;
                 case 'o':
                     digit_test_ = is_octal_digit;
                     base = 8;
-                    // num_start += 2;
+                    num_start += 2;
                     advance();
                     break;
             }
@@ -496,15 +432,10 @@ struct Scanner
 
         auto end = position;
 
-        if (mode == ScanMode::Reparse) {
-            token.type = TokenTypes::Number;
-            return;
-        }
-
-        token = {
-            .type = TokenTypes::Number,
-            .value = constants->numbers.get_id(source.substr(raw_start, end - raw_start)),
-            // .value = u32(raw_start),
+        token.type = TokenTypes::Number;
+        token.number = {
+            .value = source.substr(num_start, end - num_start),
+            .base = u8(base),
         };
     }
 
@@ -545,7 +476,8 @@ struct Scanner
                     else if (ident.substr(1) == "num") type = keyword("enum");
                     break;
                 case 'f':
-                    if      (ident.substr(1) == "or")   type = keyword("for");
+                    if      (ident.substr(1) == "n")    type = keyword("fn");
+                    else if (ident.substr(1) == "or")   type = keyword("for");
                     else if (ident.substr(1) == "alse") type = keyword("false");
                     break;
                 // gh
@@ -555,7 +487,7 @@ struct Scanner
                 case 'n': if (ident.substr(1) == "ull")  type = keyword("null");  break;
                 case 'o': if (ident.substr(1) == "r")    type = keyword("or");    break;
                 // pq
-                case 'r': if (ident.substr(1) == "eturn")    type = keyword("return"); break;
+                case 'r': if (ident.substr(1) == "eturn") type = keyword("return"); break;
                 case 's':
                     if      (ident.substr(1) == "lse")   type = keyword("else");
                     else if (ident.substr(1) == "truct") type = keyword("struct");
@@ -571,24 +503,17 @@ struct Scanner
             }
         }
 
-        if (mode == ScanMode::Reparse) {
-            token.type = type;
-            return;
-        }
-
         if (type == TokenTypes::Identifier) {
             if (is_at) {
                 report_error(start, "unknown intrinsic: {}", ident);
             } else {
-                token = {
-                    .type = TokenTypes::Identifier,
-                    .value = constants->identifiers.get_id(ident),
+                token.type = TokenTypes::Identifier;
+                token.identifier = {
+                    .value = ident,
                 };
             }
         } else {
-            token = {
-                .type = type,
-            };
+            token.type = type;
         }
     }
 
@@ -600,39 +525,79 @@ struct Scanner
         advance();
         auto start = position;
 
+        bool any_escapes = false;
+        string_scratch.clear();
+
         for (;;) {
-            // TODO: Track newlines or disallow newlines in string
             auto c = advance();
             if (!c) report_error(start - 1, "eof while parsing string");
             if (c == '"') break;
             if (c == '\n') new_line(position);
 
             if (c == '\\') {
-                if (peek() == '"') advance();
-            }
+                any_escapes = true;
 
+                switch (advance()) {
+                    case '"': string_scratch += '"'; break;
+                    case '0': string_scratch += '\0'; break;
+                    case 'a': string_scratch += '\a'; break; // bell
+                    case 'b': string_scratch += '\b'; break; // backspace
+                    case 'e': string_scratch += '\e'; break; // escape
+                    case 'f': string_scratch += '\f'; break; // form feed
+                    case 'n': string_scratch += '\n'; break; // line feed
+                    case 'r': string_scratch += "\r"; break; // carriage return
+                    case 't': string_scratch += "\t"; break; // horizontal tab
+                    case 'v': string_scratch += "\v"; break; // vertical tab
+                    case 'u': {
+                        if (advance() != '{') report_error(position - 1, "expected '{{' to begin unicode escape sequence");
+                        u32 escape_start = position;
+                        char32_t value = 0;
+                        u32 digit_count = 0;
+                        for (;;) {
+                            auto u = advance();
+                            if (u == '}') break;
+                            if (++digit_count > 6) report_error(position, "unicode sequence can be no longer than 6 hex digits");
+                            auto d = maybe_hex_digit_to_int(u);
+                            if (!d) report_error(position, "expected hex digit");
+                            value = (value << 4) | *d;
+                        }
+
+                        char utf8[4];
+                        auto[error, count] = simdutf::convert_utf32_to_utf8_with_errors(&value, 1, utf8);
+                        if (error != simdutf::error_code::SUCCESS) {
+                            report_error(escape_start, "invalid unicode value ({:#x}): {}", u32(value), simdutf_err_to_string(error));
+                        }
+
+                        string_scratch.append(utf8, count);
+                        break;
+                    }
+                    default:
+                        report_error(position - 1, "illegal escape character '{}'", source[position - 1]);
+                }
+            } else {
+                string_scratch += c;
+            }
         }
 
         auto end = position - 1;
 
-        if (mode == ScanMode::Reparse) {
-            token.type = TokenTypes::String;
-            return;
+        token.type = TokenTypes::String;
+        if (any_escapes) {
+            token.string = {
+                .value = string_scratch,
+                .is_temporary = true,
+            };
+        } else {
+            token.string = {
+                .value = source.substr(start, end - start),
+                .is_temporary = false,
+            };
         }
-
-        token = {
-            .type = TokenTypes::String,
-            .value = constants->strings.get_id(source.substr(start, end - start)),
-            // .value = u32(start),
-        };
     }
 
-    std::string scratch_raw_string_init_sequence;
     void read_rawstring()
     {
         begin_token();
-
-        // TODO: Track newlines
 
         [[maybe_unused]] auto raw_start = position;
 
@@ -652,10 +617,10 @@ struct Scanner
 
         auto str_start = position;
 
-        scratch_raw_string_init_sequence.resize(term_seq_user.size() + 2);
-        std::format_to(scratch_raw_string_init_sequence.data(), "\"{}'", term_seq_user);
+        string_scratch.resize(term_seq_user.size() + 2);
+        std::format_to(string_scratch.data(), "\"{}'", term_seq_user);
 
-        auto end_seq_pos = source.find(scratch_raw_string_init_sequence, position);
+        auto end_seq_pos = source.find(string_scratch, position);
         if (end_seq_pos == std::string_view::npos) {
             report_error(raw_start, "eof while parsing rawstring");
         }
@@ -666,39 +631,34 @@ struct Scanner
             if (source[p] == '\n') new_line(p + 1);
         }
 
-        position = end_seq_pos + scratch_raw_string_init_sequence.size();
+        position = end_seq_pos + string_scratch.size();
 
-        if (mode == ScanMode::Reparse) {
-            token.type = TokenTypes::String;
-            return;
-        }
-
-        token = {
-            .type = TokenTypes::String,
-            .value = constants->strings.get_id(source.substr(str_start, str_end - str_start)),
-            // .value = u32(raw_start),
+        token.type = TokenTypes::String;
+        token.string = {
+            .value = source.substr(str_start, str_end - str_start),
+            .is_temporary = false,
         };
     }
 
-    bool scan_one()
+    Token next() try
     {
-        token.type = TokenTypes::Invalid;
-
-        while (!is_at_end()) {
+        for (;;)
+        {
             u8 c = peek();
             switch (c) {
+                case '\0':                                      return EofToken;
                 case '\n':                new_line(++position); break;
                 case ' ': case '\t':      position++;           break;
-                LANG_DECIMAL_DIGIT_CASES: read_number();        return true;
-                LANG_PUNCTUATION_CASES:   read_punctuation();   return true;
+                LANG_DECIMAL_DIGIT_CASES: read_number();        return token;
+                LANG_PUNCTUATION_CASES:   read_punctuation();   return token;
                 case '#':                 skip_comment();       break;
-                case '@':                 read_identifier();    return true;
-                case '"':                 read_string();        return true;
-                case '\'':                read_rawstring();     return true;
+                case '@':                 read_identifier();    return token;
+                case '"':                 read_string();        return token;
+                case '\'':                read_rawstring();     return token;
                 default: {
                     if (is_valid_identifier_start_element(c)) {
                         read_identifier();
-                        return true;
+                        return token;
                     } else {
                         report_error(position, "illegal source character: {} - ({})", u32(c), char(c));
                     }
@@ -706,37 +666,31 @@ struct Scanner
                 }
             }
         }
-
-        return false;
     }
-
-    void scan() try
-    {
-        init();
-        while (scan_one()) {
-            emit_token();
-        }
-        deinit();
-
-        return;
+    catch (StopScanFlag) {
+        return InvalidToken;
     }
-    catch (StopScanFlag) {}
-
-    void find() try
-    {
-        while (scan_one()) {
-            if (token_has_value(token.type)) {
-                token_index += 5;
-            } else {
-                token_index++;
-            }
-        }
-    }
-    catch (StopScanFlag) {}
 };
 
-void lang::scan(TokenList& out, Constants& constants, ErrorList& errors, std::string_view source)
+Scanner* Scanner::create()
 {
+    return new Scanner::Impl{};
+}
+
+void Scanner::destroy(Scanner* _self)
+{
+    delete get_impl(_self);
+}
+
+bool Scanner::init(ErrorList& errors, std::string_view source)
+{
+    decl_self(this);
+
+    *self = {
+        .errors = &errors,
+        .source = source,
+    };
+
     auto res = simdutf::validate_utf8_with_errors(source);
     if (res.is_err()) {
         errors.errors.emplace_back(Error {
@@ -744,45 +698,13 @@ void lang::scan(TokenList& out, Constants& constants, ErrorList& errors, std::st
             .file_offset = 0,
             .message = std::format("source not valid UTF-8: {}", simdutf_err_to_string(res.error)),
         });
-        return;
+        return false;
     }
 
-    out.constants = &constants;
-    out.clear();
-
-    Scanner scanner{
-        .token_list = &out,
-        .errors = &errors,
-        .constants = &constants,
-        .source = source,
-        .position = 0,
-    };
-
-    scanner.scan();
+    return true;
 }
 
-// u32 find_token_file_offset(TokenList& tokens, std::string_view source, u32 token_index)
-// {
-//     Scanner scanner;
-//     // scanner.token_list = &tokens;
-//     scanner.source = source;
-//     scanner.mode = ScanMode::Reparse;
-
-//     auto line = tokens.find_line_for_token(token_index);
-//     scanner.position = tokens.lines[line].first_token_file_offset;
-//     scanner.token_index = tokens.lines[line].first_token;
-//     scanner.target_token_index = token_index;
-
-//     // log_warn("searching for token");
-//     // log_warn("  line = {}", line);
-//     // log_warn("  position = {}", scanner.position);
-//     // log_warn("  token_index = {}", scanner.token_index);
-//     // log_warn("  target_token_index = {}", scanner.target_token_index);
-
-//     scanner.find();
-
-//     // log_warn("  final position = {}", scanner.position);
-
-//     return scanner.position;
-//     // return tokens.lines[line].first_token_file_offset;
-// }
+Token Scanner::next()
+{
+    return get_impl(this)->next();
+}

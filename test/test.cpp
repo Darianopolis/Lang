@@ -31,11 +31,14 @@ void run_tests()
     }
 
     log_info("Tests complete");
-    log_info("  {} succeeded", results.successes);
+    log_info(" {:4} succeeded", results.successes);
+    if (results.skipped) {
+        log_info(" {:4} skipped", results.skipped);
+    }
     if (results.failures) {
-        log_error("  {} failed", results.failures);
+        log_error(" {:4} failed", results.failures);
     } else {
-        log_info("  {} failed", results.failures);
+        log_info(" {:4} failed", results.failures);
     }
 }
 
