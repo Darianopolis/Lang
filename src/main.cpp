@@ -3,7 +3,7 @@
 #include <filesystem>
 
 #include <lang/core.hpp>
-#include <lang/ast.hpp>
+#include <lang/lang.hpp>
 
 #include <simdutf.h>
 
@@ -215,12 +215,9 @@ x :: 123;
 
     for (auto iter = tokens.begin(); !iter.is_at_end(); iter.advance()) {
         auto token = iter.peek();
-        auto matched = tokens.matching_pair_for(token);
 
         switch (token.type) {
-            case punc(")"):
-            case punc("]"):
-            case punc("}"):
+            TOKEN_CloseBracketCases:
                 indent--;
         }
 
@@ -231,8 +228,9 @@ x :: 123;
         message += token_to_string(constants, token);
         std::println("{}", message);
 
-        if (!matched.is_at_end()) {
-            indent++;
+        switch (token.type) {
+            TOKEN_OpenBracketCases:
+                indent++;
         }
     }
 #endif

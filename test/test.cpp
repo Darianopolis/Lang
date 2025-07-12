@@ -25,6 +25,7 @@ void run_tests()
         try {
             results += test.function();
         } catch(...) {
+            log_error("Test [{}] failed with exception", test.name);
             results += TestResult::Failed;
         }
     }
@@ -40,7 +41,10 @@ void run_tests()
 
 NAMESPACE_END
 
+extern void samples();
+
 int main()
 {
     lang::test::run_tests();
+    // samples();
 }

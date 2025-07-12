@@ -1,6 +1,6 @@
-#include "ast.hpp"
+#include "lang.hpp"
 
-#include "unicode.hpp"
+#include "strings.hpp"
 
 #include <cmath>
 
@@ -87,8 +87,6 @@ enum class ScanMode
     Reparse,
 };
 
-u32 find_token_file_offset(TokenList& tokens, std::string_view source, u32 token_index);
-
 struct Scanner
 {
     TokenList* token_list;
@@ -165,40 +163,22 @@ struct Scanner
         // log_debug("emitting {} index = {}, offset = {}", token_to_string(*constants, token), token_index, offset);
 
         switch (token.type) {
-            case punc("{"):
-            case punc("["):
-            case punc("("):
-            case punc("${"):
-            case punc("\\{"):
-            case punc("\\id{"):
+            TOKEN_OpenBracketCases:
             {
                 beginning_tokens.emplace_back(offset, position - 1);
                 break;
             }
-            case punc("}"):
-            case punc("]"):
-            case punc(")"):
+            TOKEN_CloseBracketCases:
             {
                 if (beginning_tokens.empty()) {
                     report_error(position - 1, "unexpected closing bracket, no open brackets");
                 }
                 auto begin_token_type = TokenType(token_list->tokens[beginning_tokens.back().token_index]);
 
-                switch (token.type) {
-                    case punc("}"):
-                        if (begin_token_type != punc("{")
-                                && begin_token_type != punc("${")
-                                && begin_token_type != punc("\\{")
-                                && begin_token_type != punc("\\id{"))
-                            report_error(position - 1, "mismatched pair - found unexpected closing '}}'");
-                        break;
-                    case punc("]"):
-                        if (begin_token_type != punc("["))
-                            report_error(position - 1, "mismatched pair - found unexpected closing ']'");
-                        break;
-                    case punc(")"):
-                        if (begin_token_type != punc("("))
-                            report_error(position - 1, "mismatched pair - found unexpected closing ')'");
+                auto expected = get_matching_bracket_token_type(begin_token_type);
+                if (expected != token.type) {
+                    report_error(position - 1, "mismatched bracket pair - expected '{}' found '{}'",
+                        get_token_type_name(expected), get_token_type_name(token.type));
                 }
 
                 // begin_token.value = offset;
@@ -220,10 +200,8 @@ struct Scanner
     {
         if (!beginning_tokens.empty()) {
             for (auto& t : beginning_tokens) {
-                // report_error_nothrow(t.file_offset, "unclosed bracket");
-                report_error_nothrow(find_token_file_offset(*token_list, source, t.token_index), "unclosed bracket");
+                report_error_nothrow(t.file_offset, "unclosed bracket");
             }
-            throw StopScanFlag{};
         }
     }
 
@@ -732,16 +710,19 @@ struct Scanner
         return false;
     }
 
-    void scan()
+    void scan() try
     {
+        init();
         while (scan_one()) {
             emit_token();
         }
+        deinit();
 
         return;
     }
+    catch (StopScanFlag) {}
 
-    void find()
+    void find() try
     {
         while (scan_one()) {
             if (token_has_value(token.type)) {
@@ -751,57 +732,57 @@ struct Scanner
             }
         }
     }
+    catch (StopScanFlag) {}
 };
 
 void lang::scan(TokenList& out, Constants& constants, ErrorList& errors, std::string_view source)
 {
-    try {
-        auto res = simdutf::validate_utf8_with_errors(source);
-        if (res.is_err()) raise_error("source not valid UTF-8: {}", simdutf_err_to_string(res.error));
-
-        out.constants = &constants;
-        out.clear();
-
-        Scanner scanner{
-            .token_list = &out,
-            .errors = &errors,
-            .constants = &constants,
-            .source = source,
-            .position = 0,
-        };
-
-        scanner.init();
-        scanner.scan();
-        scanner.deinit();
-    } catch (StopScanFlag) {
-        ;
+    auto res = simdutf::validate_utf8_with_errors(source);
+    if (res.is_err()) {
+        errors.errors.emplace_back(Error {
+            .line = 0,
+            .file_offset = 0,
+            .message = std::format("source not valid UTF-8: {}", simdutf_err_to_string(res.error)),
+        });
+        return;
     }
+
+    out.constants = &constants;
+    out.clear();
+
+    Scanner scanner{
+        .token_list = &out,
+        .errors = &errors,
+        .constants = &constants,
+        .source = source,
+        .position = 0,
+    };
+
+    scanner.scan();
 }
 
-u32 find_token_file_offset(TokenList& tokens, std::string_view source, u32 token_index)
-{
-    Scanner scanner;
-    // scanner.token_list = &tokens;
-    scanner.source = source;
-    scanner.mode = ScanMode::Reparse;
+// u32 find_token_file_offset(TokenList& tokens, std::string_view source, u32 token_index)
+// {
+//     Scanner scanner;
+//     // scanner.token_list = &tokens;
+//     scanner.source = source;
+//     scanner.mode = ScanMode::Reparse;
 
-    auto line = tokens.find_line_for_token(token_index);
-    scanner.position = tokens.lines[line].first_token_file_offset;
-    scanner.token_index = tokens.lines[line].first_token;
-    scanner.target_token_index = token_index;
+//     auto line = tokens.find_line_for_token(token_index);
+//     scanner.position = tokens.lines[line].first_token_file_offset;
+//     scanner.token_index = tokens.lines[line].first_token;
+//     scanner.target_token_index = token_index;
 
-    // log_warn("searching for token");
-    // log_warn("  line = {}", line);
-    // log_warn("  position = {}", scanner.position);
-    // log_warn("  token_index = {}", scanner.token_index);
-    // log_warn("  target_token_index = {}", scanner.target_token_index);
+//     // log_warn("searching for token");
+//     // log_warn("  line = {}", line);
+//     // log_warn("  position = {}", scanner.position);
+//     // log_warn("  token_index = {}", scanner.token_index);
+//     // log_warn("  target_token_index = {}", scanner.target_token_index);
 
-    try {
-        scanner.find();
-    } catch (StopScanFlag) {}
+//     scanner.find();
 
-    // log_warn("  final position = {}", scanner.position);
+//     // log_warn("  final position = {}", scanner.position);
 
-    return scanner.position;
-    // return tokens.lines[line].first_token_file_offset;
-}
+//     return scanner.position;
+//     // return tokens.lines[line].first_token_file_offset;
+// }

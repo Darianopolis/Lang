@@ -1,8 +1,7 @@
 #include "test.hpp"
 
-#include "lang/tokens.hpp"
-#include "lang/ast.hpp"
-#include "lang/unicode.hpp"
+#include "lang/lang.hpp"
+#include "lang/strings.hpp"
 
 #include <random>
 
@@ -23,7 +22,7 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
     scan(tokens, constants, errors, input);
 
     if (errors.any_errors()) {
-        errors.print_errors(constants, tokens, input);
+        errors.print_errors(input);
         return TestResult::Failed;
     }
 
@@ -65,7 +64,7 @@ TestResults test_full_parse(Constants& constants, std::string_view input)
 
     scan(tokens, constants, errors, input);
     if (errors.any_errors()) {
-        errors.print_errors(constants, tokens, input);
+        errors.print_errors(input);
         return TestResult::Failed;
     }
 
@@ -144,19 +143,17 @@ TestResults test_positives()
         for (auto& _p : PunctuationSequences) {
             auto type = punc_runtime(_p);
             switch (type) {
-                case punc(")"):
-                case punc("]"):
-                case punc("}"):
+                TOKEN_CloseBracketCases:
                     // handled by following
                     break;
-                case punc("("):     res += test_scan_parse(constants, std::format("{} )",  _p), { sym_rt(_p, 5), sym(")") }); break;
-                case punc("["):     res += test_scan_parse(constants, std::format("{} ]",  _p), { sym_rt(_p, 5), sym("]") }); break;
-                case punc("{"):     res += test_scan_parse(constants, std::format("{} }}", _p), { sym_rt(_p, 5), sym("}") }); break;
-                case punc("${"):    res += test_scan_parse(constants, std::format("{} }}", _p), { sym_rt(_p, 5), sym("}") }); break;
-                case punc("\\{"):   res += test_scan_parse(constants, std::format("{} }}", _p), { sym_rt(_p, 5), sym("}") }); break;
-                case punc("\\id{"): res += test_scan_parse(constants, std::format("{} }}", _p), { sym_rt(_p, 5), sym("}") }); break;
+                TOKEN_OpenBracketCases:
+                    res += test_scan_parse(constants,
+                        std::format("{} {}", _p, get_token_type_name(get_matching_bracket_token_type(type))),
+                        { sym_rt(_p, 5), {get_matching_bracket_token_type(type)} });
+                    break;
 
-                default: tmp += test_scan_parse(constants, _p, { {punc_runtime(_p)} });
+                default:
+                    tmp += test_scan_parse(constants, _p, { {punc_runtime(_p)} });
             }
         }
         res += tmp.collapse();
@@ -216,17 +213,15 @@ TestResults scan_fuzz()
 
         // log_trace("source:\n{}", input);
 
-        try {
-            constants.clear();
-            errors.clear();
-            {
-                // LogLevelGuard _{LogLevel::Fatal};
-                scan(tokens, constants, errors, input);
-            }
-            // if (errors.any_errors()) {
-            //     errors.print_errors(constants, tokens, input);
-            // }
-        } catch (...) {}
+        constants.clear();
+        errors.clear();
+        {
+            // LogLevelGuard _{LogLevel::Fatal};
+            scan(tokens, constants, errors, input);
+        }
+        // if (errors.any_errors()) {
+        //     errors.print_errors(input);
+        // }
     }
 
     return TestResult::Success;

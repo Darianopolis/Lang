@@ -1,8 +1,8 @@
+#pragma once
+
 #include "core.hpp"
 
 #include <simdutf.h>
-
-#include <vector>
 
 NAMESPACE_BEGIN(lang)
 
@@ -64,92 +64,20 @@ const char* simdutf_err_to_string(simdutf::error_code code)
     std::unreachable();
 }
 
-#if 0
-struct Utf8IteratorEntry
+inline
+std::string_view get_containing_line(std::string_view str, usz index)
 {
-    c32 value = 0;
-    u64 loc = {};
-
-    operator bool() const noexcept { return value; };
-};
-
-struct Utf8Iterator
-{
-    std::string_view source;
-    u64 position = 0;
-
-    Utf8Iterator(std::string_view source, std::vector<c32>& buf)
-        : source(source)
-    {}
-    Utf8IteratorEntry next()
-    {
-        constexpr static auto fetch_add = [](auto& v, auto s) {
-            auto r = v;
-            v += s;
-            return r;
-        };
-
-        constexpr static auto get_trailing = [](u8 value) {
-            if ((value & 0b1100'0000) != 0b1000'0000) {
-                raise_error("expected trailing byte");
-            }
-            return value & 0b0011'1111;
-        };
-
-        if (position >= source.size()) {
-            // eof
-            return {0};
-        }
-
-        u8 leading = source[position];
-
-        if (leading < 0b1000'0000) {
-            // 1 byte
-            return {c32(leading), fetch_add(position, 1)};
-        }
-
-        if (leading < 0b1100'0000) {
-            raise_error("unexpected trailing byte");
-        }
-
-        if (leading < 0b1110'0000) {
-            // 2 byte
-
-            if (position + 1 >= source.size()) raise_error("incomplete codepoint");
-            u32 v0 = leading & 0b0001'1111;
-            u32 v1 = get_trailing(source[position + 1]);
-            auto c = v1 | (v0 << 6);
-            if (c < (c << 7)) raise_error("overlong sequence");
-            return {c, fetch_add(position, 2)};
-        }
-
-        if (leading < 0b1111'0000) {
-            // 3 byte
-
-            if (position + 2 >= source.size()) raise_error("incomplete codepoint");
-            u32 v0 = leading & 0b0000'1111;
-            u32 v1 = get_trailing(source[position + 1]);
-            u32 v2 = get_trailing(source[position + 2]);
-            auto c = v2 | (v1 << 6) | (v0 << 12);
-            if (c < (1 << 11)) raise_error("overlong sequence");
-            return {c, fetch_add(position, 3)};
-        }
-
-        if (leading < 0b1111'1000) {
-            // 4 byte
-
-            if (position + 3 >= source.size()) raise_error("incomplete codepoint");
-            u32 v0 = leading & 0b0000'0111;
-            u32 v1 = get_trailing(source[position + 1]);
-            u32 v2 = get_trailing(source[position + 2]);
-            u32 v3 = get_trailing(source[position + 3]);
-            auto c = v3 | (v2 << 6) | (v1 << 12) | (v0 << 18);
-            if (c < (1 << 16)) raise_error("overlong sequence");
-            return {c, fetch_add(position, 4)};
-        }
-        raise_error("too many header bits");
+    auto start_of_line = str.substr(0, index).find_last_of('\n');
+    if (start_of_line == std::string::npos) {
+        start_of_line = 0;
+    } else {
+        start_of_line++;
     }
-};
-#endif
+
+    auto end_of_line = str.find_first_of('\n', index);
+    if (end_of_line == std::string::npos) end_of_line = str.size();
+
+    return str.substr(start_of_line, end_of_line - start_of_line);
+}
 
 NAMESPACE_END

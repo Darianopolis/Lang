@@ -1,6 +1,8 @@
 #pragma once
 
-#include <lang/core.hpp>
+#include "core.hpp"
+#include "strings.hpp"
+#include "lang.hpp"
 
 #include <vector>
 #include <variant>
@@ -12,6 +14,65 @@
 
 NAMESPACE_BEGIN(lang)
 
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//     Error Reporting
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+struct Error
+{
+    u32 line;
+    u32 file_offset;
+    std::string message;
+};
+
+struct ErrorList
+{
+    std::vector<Error> errors;
+
+    void clear()
+    {
+        errors.clear();
+    }
+
+    bool any_errors() const
+    {
+        return !errors.empty();
+    }
+
+    void print_errors(std::string_view source)
+    {
+        // TODO: Convert tabs to spaces and adjust visual columns accordingly
+
+        for (auto& error : errors) {
+            auto line_str = get_containing_line(source, error.file_offset);
+            log_error("{:5} | {}", error.line, line_str);
+
+            std::string indent(error.file_offset - (line_str.data() - source.data()), ' ');
+            log_error("      | {}" text_ansi_color(93, "^~") , indent);
+
+            log_error("      | {}", error.message);
+        }
+    }
+};
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//     Constants
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
 template<typename T>
@@ -67,7 +128,15 @@ struct Constants
 };
 
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 //     Tokens
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
 constexpr std::array Keywords
@@ -246,19 +315,45 @@ struct Token
     u32 value;
 };
 
+#define TOKEN_CloseBracketCases \
+    case punc(")"): \
+    case punc("]"): \
+    case punc("}") \
+
+#define TOKEN_OpenBracketCases \
+    case punc("["): \
+    case punc("("): \
+    case punc("{"): \
+    case punc("${"): \
+    case punc("\\{"): \
+    case punc("\\id{") \
+
+inline
+TokenType get_matching_bracket_token_type(TokenType type)
+{
+    switch (type) {
+        case punc("["): return punc("]");
+        case punc("("): return punc(")");
+        case punc("{"): return punc("}");
+        case punc("${"): return punc("}");
+        case punc("\\{"): return punc("}");
+        case punc("\\id{"): return punc("}");
+        default:
+            raise_error("get_matching_bracket_token_type :: unknown {}", std::to_underlying(type));
+    }
+}
+
+#define TOKEN_HasValueCases \
+    case TokenTypes::Identifier: \
+    case TokenTypes::String: \
+    case TokenTypes::Number: \
+    TOKEN_OpenBracketCases \
+
 inline
 bool token_has_value(TokenType type)
 {
     switch (type) {
-        case TokenTypes::Identifier:
-        case TokenTypes::String:
-        case TokenTypes::Number:
-        case punc("["):
-        case punc("("):
-        case punc("{"):
-        case punc("${"):
-        case punc("\\{"):
-        case punc("\\id{"):
+        TOKEN_HasValueCases:
             return true;
         default:
             return false;
@@ -290,6 +385,18 @@ std::string token_to_string(Constants& constants, Token token)
     }
 }
 
+constexpr bool is_end_of_expression_token(Token token)
+{
+    switch (token.type) {
+        TOKEN_CloseBracketCases:
+        case punc(";"):
+        case punc(","):
+            return true;
+        default:
+            return false;
+    }
+}
+
 constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
 constexpr auto EofToken = Token { .type = TokenTypes::Eof };
 
@@ -298,30 +405,6 @@ struct Line
     // u32 file_offset = 0;
     u32 first_token_file_offset = 0;
     u32 first_token = InvalidTokenIndex;
-};
-
-struct Error
-{
-    u32 line;
-    u32 file_offset;
-    std::string message;
-};
-
-struct ErrorList
-{
-    std::vector<Error> errors;
-
-    void clear()
-    {
-        errors.clear();
-    }
-
-    bool any_errors() const
-    {
-        return !errors.empty();
-    }
-
-    void print_errors(Constants& constants, struct TokenList& token_list, std::string_view source);
 };
 
 struct TokenList
@@ -456,11 +539,7 @@ inline
 TokenIterator TokenList::matching_pair_for(Token token) const
 {
     switch (token.type) {
-        case punc("("):
-        case punc("["):
-        case punc("{"):
-        case punc("\\{"):
-        case punc("\\id{"):
+        TOKEN_OpenBracketCases:
         {
             auto i = token.value;
             return TokenIterator{this, i};
@@ -476,24 +555,18 @@ TokenIterator TokenList::begin() const
     return TokenIterator{this, 0};
 }
 
-constexpr bool is_end_of_expression_token(Token token)
-{
-    switch (token.type) {
-        case punc(")"):
-        case punc("}"):
-        case punc("]"):
-        case punc(";"):
-        case punc(","):
-            return true;
-        default:
-            return false;
-    }
-}
-
 void scan(TokenList& out, Constants& constants, ErrorList& errors, std::string_view source);
 
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 //     Operators
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
 #define OPS_Postfix \
@@ -666,5 +739,238 @@ constexpr bool is_op_postfix(Operator op)
             return false;
     }
 }
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//     Abstract Syntax Tree
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+constexpr u32 AstHeader_Start = 0xFFFF'0000;
+
+#define AST_Headers(DO) \
+    DO(Literal_Number, = AstHeader_Start) \
+    DO(Literal_String) \
+    DO(Literal_True) \
+    DO(Literal_False) \
+    DO(Identifier) \
+    DO(VarDecl) \
+    DO(VarDecl_Type) \
+    DO(VarDecl_ConstInit) \
+    DO(VarDecl_MutableInit) \
+    DO(VarDecl_TypeConstInit) \
+    DO(VarDecl_TypeMutableInit) \
+    DO(While) \
+    DO(WhileElse) \
+    DO(For) \
+    DO(ForElse) \
+    DO(Block) \
+    DO(File) \
+    DO(If) \
+    DO(IfElse) \
+    DO(Function_Definition) \
+    DO(Function_Prototype) \
+    DO(Defer) \
+
+enum class AstHeader : u32
+{
+#define AST_Headers_DECLARE(name, ...) name __VA_ARGS__,
+    AST_Headers(AST_Headers_DECLARE)
+#define X(name, ...) name,
+    OPS_Prefix
+    OPS_Postfix
+    OPS_Arithmetic
+    OPS_Bitwise
+    OPS_Logical
+    OPS_Comparison
+    OPS_Range
+    OPS_Assign
+#undef X
+#define X(name, ...) name, name##_Empty,
+    OPS_ControlFlow
+#undef X
+    End  = ~0u - 0,
+};
+
+inline
+AstHeader get_vardecl_header(bool constant, bool type, bool init)
+{
+    if (init) {
+        if (type) {
+            return constant
+                ? AstHeader::VarDecl_TypeConstInit
+                : AstHeader::VarDecl_TypeMutableInit;
+        } else {
+            return constant
+                ? AstHeader::VarDecl_ConstInit
+                : AstHeader::VarDecl_MutableInit;
+        }
+    } else {
+        return type ? AstHeader::VarDecl_Type : AstHeader::VarDecl;
+    }
+}
+
+inline
+bool ast_vardecl_header_is_constant(AstHeader header)
+{
+    return header == AstHeader::VarDecl_ConstInit
+        || header == AstHeader::VarDecl_TypeConstInit;
+}
+
+inline
+bool ast_vardecl_header_has_type(AstHeader header)
+{
+    return header == AstHeader::VarDecl_Type
+        || header == AstHeader::VarDecl_TypeConstInit
+        || header == AstHeader::VarDecl_TypeMutableInit;
+}
+
+inline
+bool ast_vardecl_header_has_init(AstHeader header)
+{
+    return header == AstHeader::VarDecl_ConstInit
+        || header == AstHeader::VarDecl_MutableInit
+        || header == AstHeader::VarDecl_TypeConstInit
+        || header == AstHeader::VarDecl_TypeMutableInit;
+}
+
+inline
+std::string_view get_ast_header_name(AstHeader header)
+{
+    switch (header)
+    {
+    #define AST_Headers_ToString(name, ...) case AstHeader::name : return #name;
+        AST_Headers(AST_Headers_ToString)
+    #define X(name, ...) case AstHeader::name: return #name;
+        OPS_Prefix
+        OPS_Postfix
+        OPS_Arithmetic
+        OPS_Bitwise
+        OPS_Logical
+        OPS_Comparison
+        OPS_Range
+        OPS_Assign
+    #undef X
+    #define X(name, ...) case AstHeader::name:     return #name; \
+                     case AstHeader::name##_Empty: return #name "_Empty";
+        OPS_ControlFlow
+    #undef X
+        case AstHeader::End: return "End";
+        default: raise_error("unknown header: {}", std::to_underlying(header));
+    }
+}
+
+struct AstOffset
+{
+    static constexpr u32 Invalid = ~0u;
+
+    u32 value = Invalid;
+
+    AstOffset() noexcept = default;
+    AstOffset(u32 bytecode_value) noexcept: value(bytecode_value) {}
+
+    explicit operator bool() const noexcept
+    {
+        return value != Invalid;
+    }
+
+    AstOffset operator+(i32 delta) const noexcept
+    {
+        return {value + delta};
+    }
+};
+
+struct Ast
+{
+    std::vector<u32> code;
+
+    AstOffset offset()
+    {
+        return {u32(code.size())};
+    }
+
+    u32* pointer_to(AstOffset offset)
+    {
+        return code.data() + offset.value;
+    }
+
+    AstOffset write(AstHeader header) {
+        auto _offset = offset();
+        code.emplace_back(std::to_underlying(header));
+        return _offset;
+    }
+
+    template<typename T>
+    void write(T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            u32 v = {};
+            std::memcpy(&v, &t, sizeof(T));
+            code.emplace_back(v);
+        } else {
+            static_assert(sizeof(T) % 4 == 0);
+            auto offset = code.size();
+            code.resize(offset + sizeof(T) / 4);
+            std::memcpy(code.data() + offset, &t, sizeof(T));
+        }
+    }
+
+    template<typename T>
+    void write_at(AstOffset offset, T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            std::memcpy(code.data() + offset.value, &t, sizeof(T));
+        } else {
+            raise_error("TODO");
+        }
+    }
+
+    template<typename T>
+    void insert_at(AstOffset offset, T t)
+    {
+        if constexpr (sizeof(T) <= 4) {
+            u32 v = {};
+            std::memcpy(&v, &t, sizeof(T));
+            code.insert(code.begin() + offset.value, v);
+        } else {
+            raise_error("TODO");
+        }
+    }
+};
+
+struct AstListBuilder
+{
+    Ast* ast;
+    AstOffset first;
+    AstOffset last;
+
+    AstListBuilder(Ast& _ast): ast(&_ast) {}
+
+    void add(AstOffset entry)
+    {
+        if (last) ast->write_at(last, entry);
+        else first = entry;
+        last = entry;
+        ast->insert_at(last, AstOffset{});
+    }
+
+    AstOffset to_list()
+    {
+        return first;
+    }
+};
+
+AstOffset parse(Ast& out, TokenList& tokens, Constants& constants);
+
+void ast_print_flat(Constants& constants, Ast& ast);
+void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);
+void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset);
+void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::string_view source);
 
 NAMESPACE_END
