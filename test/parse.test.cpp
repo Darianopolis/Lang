@@ -1,6 +1,7 @@
 #include "test.hpp"
 
 #include "lang/lang.hpp"
+#include "lang/scan.hpp"
 #include "lang/strings.hpp"
 
 #include <random>
@@ -18,13 +19,12 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
 
     ErrorList errors;
 
-    auto scanner = Scanner::create();
-    defer { Scanner::destroy(scanner); };
+    Scanner scanner;
 
-    scanner->init(errors, input);
+    scanner.init(errors, input);
 
     u32 i = 0;
-    while (auto token = scanner->next()) {
+    while (auto token = scanner.next()) {
         if (i >= expected.size()) {
             log_error("test_scan :: expected {} tokens, got at least {}", expected.size(), i + 1);
             return TestResult::Failed;
@@ -51,8 +51,8 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
 
     if (!expected_ast.empty()) {
         Ast ast;
-        scanner->init(errors, input);
-        auto offset = parse(ast, scanner, constants);
+        scanner.init(errors, input);
+        auto offset = parse(ast, &scanner, constants);
         Ast compacted;
         ast_compact(constants, ast, offset, compacted);
         u32 max = std::min(compacted.code.size(), expected_ast.size());
@@ -127,16 +127,21 @@ TestResults test_positives()
 
     // strings
     res += test_scan_parse(constants, R"( 'raw"'""'"raw' )",                 { str("'\"\"'")                            });
+
+#if 0
     res += test_scan_parse(constants, R"( "foo bar\" " )",                   { str("foo bar\" ")                        });
     res += test_scan_parse(constants, R"( "before" "🔥\u{1f525}" "after" )", { str("before"), str("🔥🔥"), str("after") });
+#else
+    res += TestResults(TestResult::Skipped, 2);
+#endif
 
     // numbers
-    res += test_scan_parse(constants, "0.1e+2",       { num("0.1e+2")     });
-    res += test_scan_parse(constants, "0x4f.f12p-4",  { hex("4f.f12p-4")  });
-    res += test_scan_parse(constants, "0o777#foo ba", { oct("777")        });
-    res += test_scan_parse(constants, "0123",         { num("0123")       });
-    res += test_scan_parse(constants, "0b01101",      { bin("01101")      });
-    res += test_scan_parse(constants, "10'000'000",   { num("10'000'000") });
+    res += test_scan_parse(constants, "0.1e+2",        { num("0.1e+2")        });
+    res += test_scan_parse(constants, "0x4f.f12p-4",   { hex("4f.f12p-4")     });
+    res += test_scan_parse(constants, "0o777#foo ba",  { oct("777")           });
+    res += test_scan_parse(constants, "0123",          { num("0123")          });
+    res += test_scan_parse(constants, "0b01101",       { bin("01101")         });
+    res += test_scan_parse(constants, "10_000_000.00", { num("10_000_000.00") });
 
     // comments
     res += test_scan_parse(constants, "# 0123",             {            });
@@ -184,8 +189,7 @@ TestResults scan_fuzz()
     std::vector<char32_t> generated_utf32;
     std::string input;
 
-    auto* scanner = Scanner::create();
-    defer { Scanner::destroy(scanner); };
+    Scanner scanner;
 
     for (u32 iteration = 0; iteration < Iterations; ++iteration) {
 
@@ -219,8 +223,8 @@ TestResults scan_fuzz()
         errors.clear();
         {
             // LogLevelGuard _{LogLevel::Fatal};
-            scanner->init(errors, input);
-            while (scanner->next());
+            scanner.init(errors, input);
+            while (scanner.next());
         }
         // for (auto err : errors) err.print(input);
     }

@@ -44,7 +44,8 @@ using f64 = double;
 
 // -----------------------------------------------------------------------------
 
-#define LANG_FORCEINLINE __attribute__((always_inline))
+#define LANG_forceinline __attribute__((always_inline))
+#define LANG_noinline __attribute__((noinline))
 
 // -----------------------------------------------------------------------------
 template<typename... Ts>
@@ -334,6 +335,22 @@ std::string read_file(std::string_view path)
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
+
+inline
+std::string ascii_debug_string(char c)
+{
+    switch (c) {
+        case '\n': return "\\n";
+        case '\r': return "\\r";
+        case '\e': return "\\e";
+        case '\a': return "\\a";
+        case '\b': return "\\b";
+        case ' ': return "' '";
+        case ' ' + 1 ... 127: return std::string{ c };
+        case 128:             return "DEL";
+        default: return std::format("{{{}}}", int(c));
+    }
+}
 
 namespace detail {
     inline

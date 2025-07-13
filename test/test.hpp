@@ -19,10 +19,10 @@ struct TestResults
 
     TestResults() = default;
 
-    TestResults(TestResult res)
-        : successes(res == TestResult::Success)
-        , failures(res == TestResult::Failed)
-        , skipped(res == TestResult::Skipped)
+    TestResults(TestResult res, u32 count = 1)
+        : successes(res == TestResult::Success ? count : 0)
+        , failures(res == TestResult::Failed ? count : 0)
+        , skipped(res == TestResult::Skipped ? count : 0)
     {}
 
     TestResults& operator+=(const TestResults& res)
@@ -51,5 +51,17 @@ struct TestResults
 struct Registered {};
 
 Registered register_test(std::string_view name, TestResults(*)());
+
+// -----------------------------------------------------------------------------
+
+void report_speed(std::string_view label, u64 bytes, auto duration)
+{
+    auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(duration).count();
+    std::println("{} {} in {} ({}/s)",
+        label,
+        byte_size_to_string(bytes),
+        duration_to_string(duration),
+        byte_size_to_string(u64(f64(bytes) / seconds)));
+}
 
 NAMESPACE_END

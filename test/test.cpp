@@ -16,17 +16,52 @@ Registered register_test(std::string_view name, TestResults(*function)())
     return {};
 }
 
-void run_tests()
+TestResults run_test(Test& test)
 {
-    log_info("Running {} tests..", tests.size());
+    log_info("Running {}..", test.name);
+    // try {
+        return test.function();
+    // } catch(...) {
+    //     log_error("Test [{}] failed with exception", test.name);
+    //     return TestResult::Failed;
+    // }
+}
+
+void run_tests(int argc, char* argv[])
+{
+    if (argc < 2) {
+        log_info("Tests:");
+        for (auto& test : tests) {
+            log_info(" - {}", test.name);
+        }
+        return;
+    }
 
     TestResults results;
-    for (auto& test : tests) {
-        try {
-            results += test.function();
-        } catch(...) {
-            log_error("Test [{}] failed with exception", test.name);
-            results += TestResult::Failed;
+
+    log_info("argv[1] = [{}]", argv[1]);
+
+    if ("--all"sv == argv[1] || "-A"sv == argv[1]) {
+        log_info("Running all tests..", tests.size());
+
+        for (auto& test : tests) {
+            results += run_test(test);
+        }
+    } else {
+        for (i32 i = 1; i < argc; ++i) {
+            auto test_name = argv[i];
+
+            bool found = false;
+            for (auto& test : tests) {
+                if (test.name == test_name) {
+                    results += run_test(test);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                log_error("Could not find test: {}", test_name);
+            }
         }
     }
 
@@ -46,8 +81,7 @@ NAMESPACE_END
 
 extern void samples();
 
-int main()
+int main(int argc, char* argv[])
 {
-    lang::test::run_tests();
-    // samples();
+    lang::test::run_tests(argc, argv);
 }

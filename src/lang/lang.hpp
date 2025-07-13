@@ -14,6 +14,28 @@
 
 NAMESPACE_BEGIN(lang)
 
+struct PaddedStringView
+{
+    const char* data;
+    usz count;
+
+    usz size()
+    {
+        return count;
+    }
+
+    std::string_view substr(usz first, usz len)
+    {
+        return std::string_view(data + first, len);
+    }
+
+    LANG_forceinline
+    constexpr u8 operator[](usz index) const noexcept
+    {
+        return data[index];
+    }
+};
+
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -29,7 +51,8 @@ NAMESPACE_BEGIN(lang)
 struct Error
 {
     u32 line;
-    u32 file_offset;
+    u32 head_file_offset;
+    u32 tail_file_offset;
     std::string message;
 
     void print(std::string_view source);
@@ -224,6 +247,8 @@ inline
 std::string_view get_token_type_name(TokenType type)
 {
     switch (type) {
+        case TokenTypes::Eof:
+            return "Eof";
         case TokenTypes::Identifier:
             return "Identifier";
         case TokenTypes::String:
@@ -306,7 +331,7 @@ struct Token
 
     struct String {
         std::string_view value;
-        bool is_temporary;
+        bool has_escapes;
 
         constexpr bool operator==(const String&) const noexcept = default;
     };
@@ -368,7 +393,11 @@ std::string token_to_string(Token token)
         case TokenTypes::Identifier:
             return std::format("Identifier({})", token.identifier.value);
         case TokenTypes::String:
-            return std::format("String({})", token.string.value);
+            if (token.string.has_escapes) {
+                return std::format("String<escaped>({})", token.string.value);
+            } else {
+                return std::format("String({})", token.string.value);
+            }
         case TokenTypes::Number:
             return std::format("Number<{}>({})", token.number.base, token.number.value);
         case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
@@ -394,19 +423,6 @@ constexpr bool is_end_of_expression_token(Token token)
 
 constexpr auto InvalidToken = Token { .type = TokenTypes::Invalid };
 constexpr auto EofToken = Token { .type = TokenTypes::Eof };
-
-struct Scanner {
-    struct Impl;
-    static Scanner* create();
-    static void destroy(Scanner*);
-
-private:
-    Scanner() = default;
-
-public:
-    bool init(ErrorList& errors, std::string_view source);
-    Token next();
-};
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -709,8 +725,8 @@ std::string_view get_ast_header_name(AstHeader header)
         OPS_Range
         OPS_Assign
     #undef X
-    #define X(name, ...) case AstHeader::name:     return #name; \
-                     case AstHeader::name##_Empty: return #name "_Empty";
+    #define X(name, ...) case AstHeader::name:         return #name; \
+                         case AstHeader::name##_Empty: return #name "_Empty";
         OPS_ControlFlow
     #undef X
         case AstHeader::End: return "End";
@@ -818,7 +834,7 @@ struct AstListBuilder
     }
 };
 
-AstOffset parse(Ast& out, Scanner* scanner, Constants& constants);
+AstOffset parse(Ast& out, struct Scanner* scanner, Constants& constants);
 
 void ast_print_flat(Constants& constants, Ast& ast);
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);

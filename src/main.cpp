@@ -1,9 +1,12 @@
+
 #include <print>
 #include <fstream>
 #include <filesystem>
 
-#include <lang/core.hpp>
-#include <lang/lang.hpp>
+#include "lang/core.hpp"
+#include "lang/lang.hpp"
+#include "lang/scan.hpp"
+#include "test.hpp"
 
 #include <simdutf.h>
 
@@ -13,6 +16,13 @@ void samples()
 {
     // auto message = read_file("test/small.lang");
     // auto message = read_file("test/resources/large.lang");
+    // std::string message(200'000'000, ' ');
+    // for (u32 i = 0; i < message.size(); ++i) {
+    //     if (i % 2) message[i] = '0';
+    //     else message[i] = 'a';
+    // }
+    // message.resize(message.size() + 10);
+    // PaddedStringView input{ message.data(), message.size() - 10 };
     // auto message = read_file("test/test.lang");
 
     // auto message = read_file("test/vulkan_test.lang");
@@ -195,11 +205,11 @@ x :: 123;
 
 )";
 #endif
+    auto input = std::string_view(message);
 
     log_debug("scanning...");
 
-    auto scanner = Scanner::create();
-    defer { Scanner::destroy(scanner); };
+    Scanner scanner;
 
     Constants constants;
     ErrorList errors;
@@ -211,14 +221,16 @@ x :: 123;
     auto indent_str = ". ";
     i32 indent = 0;
 
+    scanner.init(errors, input);
     auto start = std::chrono::steady_clock::now();
-    scanner->init(errors, message);
 
     usz token_count = 0;
-#if 0
-    while (scanner->next()) token_count++;
+    Token token;
+#if ! 1
+    // while ((token = scanner.next())) token_count++;
+    while (scanner.next().type != TokenTypes::Eof);
 #else
-    while (auto token = scanner->next()) {
+    while (auto token = scanner.next()) {
         token_count++;
 
         switch (token.type) {
@@ -242,7 +254,9 @@ x :: 123;
 #endif
     auto end = std::chrono::steady_clock::now();
 
-    for (auto err : errors) err.print(message);
+    for (auto err : errors) {
+        err.print(message);
+    }
 
     {
         auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
@@ -250,11 +264,15 @@ x :: 123;
     }
 #endif
 
+    if (errors.any_errors()) {
+        return;
+    }
+
 #if 1
     start = std::chrono::steady_clock::now();
     Ast ast;
-    scanner->init(errors, message);
-    auto offset = parse(ast, scanner, constants);
+    scanner.init(errors, message);
+    auto offset = parse(ast, &scanner, constants);
     end = std::chrono::steady_clock::now();
 
     {
@@ -302,4 +320,16 @@ x :: 123;
 
     log_debug("bytecode interpreted");
 #endif
+}
+
+namespace {
+    NAMESPACE_USE(lang::test)
+
+    TestResults run_samples()
+    {
+        samples();
+        return TestResult::Success;
+    }
+
+    Registered _1 = register_test("example", run_samples);
 }

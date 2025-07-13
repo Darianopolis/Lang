@@ -1,4 +1,5 @@
 #include "lang.hpp"
+#include "scan.hpp"
 
 #include <ankerl/unordered_dense.h>
 
@@ -192,6 +193,9 @@ struct Parser
     {
         if (need_advance) {
             token = scanner->next();
+#if LANG_NOISY_PARSER
+            log_trace("{}{}", indent_str(_depth, ". "), token_to_string(token));
+#endif
             need_advance = false;
         }
         return token;
@@ -533,7 +537,7 @@ struct Parser
         return builder.to_list();
     }
 
-    LANG_FORCEINLINE
+    LANG_forceinline
     AstOffset finish_function()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -562,7 +566,7 @@ struct Parser
         }
     }
 
-    // LANG_FORCEINLINE
+    // LANG_forceinline
     // AstStruct* finish_struct()
     // {
     //     consume(punc("{"), "expected '{' following struct type introduction");
@@ -586,7 +590,7 @@ struct Parser
     //     return new AstStruct{{AstNodeType::Struct}, stmts.to_list()};
     // }
 
-    // LANG_FORCEINLINE
+    // LANG_forceinline
     // AstEnumValue* enum_value()
     // {
     //     auto ident = consume_identifier("expected identifier in enum value");
@@ -599,7 +603,7 @@ struct Parser
     //     return new AstEnumValue{{AstNodeType::EnumValue}, ident, init};
     // }
 
-    // LANG_FORCEINLINE
+    // LANG_forceinline
     // AstEnum* finish_enum()
     // {
     //     AstNode* type{};
@@ -624,7 +628,7 @@ struct Parser
     //     return new AstEnum{{AstNodeType::Enum}, type, values.to_list()};
     // }
 
-    // LANG_FORCEINLINE
+    // LANG_forceinline
     // AstNode* finish_match()
     // {
     //     auto* expr = expression();
@@ -690,7 +694,7 @@ struct Parser
     //     return new AstSplice{{AstNodeType::Splice}, block};
     // }
 
-    LANG_FORCEINLINE
+    LANG_forceinline
     AstOffset named_identifier_unchecked()
     {
         auto token = advance();
@@ -705,7 +709,7 @@ struct Parser
         return offset;
     }
 
-    LANG_FORCEINLINE
+    LANG_forceinline
     AstOffset maybe_non_recursive_expression()
     {
         LANG_PARSER_TRACE_FUNC("");
@@ -740,7 +744,7 @@ struct Parser
             case TokenTypes::String: {
                 advance();
                 auto offset = ast.write(AstHeader::Literal_String);
-                if (next.string.is_temporary) {
+                if (next.string.has_escapes) {
                     raise_error("TODO: Handle interning of escaped strings");
                 }
                 ast.write(constants->strings.get_id(next.string.value));

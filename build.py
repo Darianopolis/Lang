@@ -142,6 +142,9 @@ build_mode_flags = {
     "Release":        [ "-O2" ],
 }
 
+# simd_flags = [ "-mavx512f", "-mavx512vl", "-mavx512bw" ]
+simd_flags = [ "-mavx2" ]
+
 build_mode = args.mode
 if not build_mode in build_mode_flags:
     panic(f"Unrecognised build mode: {build_mode}")
@@ -177,8 +180,8 @@ def build():
     global links
 
     compile_procs = []
-    # compiler = "clang++"
-    compiler = "g++"
+    compiler = "clang++"
+    # compiler = "g++"
 
     compiler_path = shutil.which("ccache")
 
@@ -202,6 +205,7 @@ def build():
 
         command += compiler_warning_flags
         command += build_mode_flags[build_mode]
+        command += simd_flags
 
         for i in includes:
             command += ["-I", i]
@@ -258,6 +262,7 @@ def build():
 
     link_command += compiler_warning_flags
     link_command += build_mode_flags[build_mode]
+    link_command += simd_flags
 
     for l in links:
         link_command += [l]
@@ -315,6 +320,14 @@ simdutf_src = f"{simdutf_dir}/src/simdutf.cpp"
 source(simdutf_src, external = True)
 source_include(simdutf_src, f"{simdutf_dir}/src")
 include(f"{simdutf_dir}/include")
+
+# -----------------------------------------------------------------------------
+
+# simdjson_dir = git_source("simdjson", "https://github.com/simdjson/simdjson.git", "master")
+# simdjson_src = f"{simdjson_dir}/src/simdjson.cpp"
+# source(simdjson_src, external = True)
+# source_include(simdjson_src, f"{simdjson_dir}/src")
+# include(f"{simdjson_dir}/include")
 
 # -----------------------------------------------------------------------------
 
