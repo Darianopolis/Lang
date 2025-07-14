@@ -5,54 +5,54 @@
 
 NAMESPACE_BEGIN(lang)
 
-namespace {
+NAMESPACE_BEGIN()
 
-    termios set_input_mode()
+termios set_input_mode()
+{
+    struct termios new_termios;
+    struct termios original_termios;
+    tcgetattr(STDIN_FILENO, &original_termios);
+    new_termios = original_termios;
+
+    new_termios.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
+
+    return original_termios;
+}
+
+void restore_input_mode(const termios* original_termios)
+{
+    tcsetattr(STDIN_FILENO, TCSANOW, original_termios);
+}
+
+std::pair<int, int> get_cursor_position()
+{
+    std::cout << std::flush;
+
+    std::string response;
     {
-        struct termios new_termios;
-        struct termios original_termios;
-        tcgetattr(STDIN_FILENO, &original_termios);
-        new_termios = original_termios;
+        auto original_termios = set_input_mode();
+        defer { restore_input_mode(&original_termios); };
 
-        new_termios.c_lflag &= ~(ICANON | ECHO);
-        tcsetattr(STDIN_FILENO, TCSANOW, &new_termios);
+        std::print("\033[6n");
+        fflush(stdout);
 
-        return original_termios;
+        char ch;
+        while (read(STDIN_FILENO, &ch, 1) == 1) {
+            response += ch;
+            if (ch == 'R') break;
+        }
     }
 
-    void restore_input_mode(const termios* original_termios)
-    {
-        tcsetattr(STDIN_FILENO, TCSANOW, original_termios);
-    }
-
-    std::pair<int, int> get_cursor_position()
-    {
-        std::cout << std::flush;
-
-        std::string response;
-        {
-            auto original_termios = set_input_mode();
-            defer { restore_input_mode(&original_termios); };
-
-            std::print("\033[6n");
-            fflush(stdout);
-
-            // Read the response: ESC [ row ; col R
-            char ch;
-            while (read(STDIN_FILENO, &ch, 1) == 1) {
-                response += ch;
-                if (ch == 'R') break;
-            }
-        }
-
-        int row, col;
-        if (sscanf(response.c_str(), "\033[%d;%dR", &row, &col) == 2) {
-            return {row, col};
-        } else {
-            raise_error("failed to parse cursor position request response");
-        }
+    int row, col;
+    if (sscanf(response.c_str(), "\033[%d;%dR", &row, &col) == 2) {
+        return {row, col};
+    } else {
+        raise_error("failed to parse cursor position request response");
     }
 }
+
+NAMESPACE_END
 
 void Error::print(std::string_view source)
 {

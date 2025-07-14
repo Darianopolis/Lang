@@ -763,6 +763,11 @@ struct Ast
         return {u32(code.size())};
     }
 
+    u32 at(AstOffset offset) const noexcept
+    {
+        return code[offset.value];
+    }
+
     u32* pointer_to(AstOffset offset)
     {
         return code.data() + offset.value;

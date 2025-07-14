@@ -159,7 +159,7 @@ BindingDirection get_op_bind_dir(Operator l, Operator r)
     return iter == OperatorOrdering.end() ? BindingDirection::Invalid : iter->second;
 }
 
-#define LANG_NOISY_PARSER 0
+#define LANG_NOISY_PARSER 1
 
 #if LANG_NOISY_PARSER
 #define LANG_PARSER_TRACE_FUNC(fmt, ...) \
@@ -194,7 +194,7 @@ struct Parser
         if (need_advance) {
             token = scanner->next();
 #if LANG_NOISY_PARSER
-            log_trace("{}{}", indent_str(_depth, ". "), token_to_string(token));
+            log_trace("{}" VT_color(96, "{}"), indent_str(_depth, ". "), token_to_string(token));
 #endif
             need_advance = false;
         }
