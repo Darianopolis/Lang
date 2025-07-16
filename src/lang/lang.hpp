@@ -782,41 +782,21 @@ struct Ast
     template<typename T>
     void write(T t)
     {
-        if constexpr (sizeof(T) <= 4) {
-            u32 v = {};
-            std::memcpy(&v, &t, sizeof(T));
-            code.emplace_back(v);
-        } else {
-            static_assert(sizeof(T) % 4 == 0);
-            auto offset = code.size();
-            code.resize(offset + sizeof(T) / 4);
-            std::memcpy(code.data() + offset, &t, sizeof(T));
-        }
+        code.emplace_back(std::bit_cast<u32>(t));
     }
 
     template<typename T>
     void write_at(AstOffset offset, T t)
     {
-        if constexpr (sizeof(T) <= 4) {
-            std::memcpy(code.data() + offset.value, &t, sizeof(T));
-        } else {
-            raise_error("TODO");
-        }
+        code[offset.value] = std::bit_cast<u32>(t);
     }
 
     template<typename T>
     void insert_at(AstOffset offset, T t)
     {
-        if constexpr (sizeof(T) <= 4) {
-            u32 v = {};
-            std::memcpy(&v, &t, sizeof(T));
-            code.insert(code.begin() + offset.value, v);
-        } else {
-            raise_error("TODO");
-        }
+        code.insert(code.begin() + offset.value, std::bit_cast<u32>(t));
     }
 };
-
 struct AstListBuilder
 {
     Ast* ast;

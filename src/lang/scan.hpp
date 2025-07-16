@@ -13,12 +13,20 @@ struct Scanner
     struct StopScanFlag {};
 
     ErrorList* errors;
-    std::string_view source;
+    const char* source;
+    usz source_len;
     usz position;
 
     std::string string_scratch;
     Token token;
     u32 line = 0;
+
+// -----------------------------------------------------------------------------
+
+    std::string_view sub(usz offset, usz count)
+    {
+        return std::string_view(source).substr(offset, count);
+    }
 
 // -----------------------------------------------------------------------------
 
@@ -59,14 +67,14 @@ struct Scanner
     LANG_forceinline
     bool is_at_end()
     {
-        return position >= source.size();
+        return position >= source_len;
     }
 
     LANG_forceinline
     u8 advance()
     {
         // log_trace("c = {}", ascii_debug_string(source[position]));
-        if (position > source.size()) report_error(token.file_offset, position - 2, "unexpected eof while parsing");
+        if (position > source_len) report_error(token.file_offset, position - 2, "unexpected eof while parsing");
         return source[position++];
     }
 
@@ -108,6 +116,28 @@ struct Scanner
             }
         }
         return true;
+    }
+
+    LANG_forceinline bool match_identifier(std::string_view str)
+    {
+        auto start = position;
+        for (auto c : str) {
+            if (!match(c)) {
+                position = start;
+                return false;
+            }
+        }
+        switch (peek()) {
+            case 'a' ... 'z':
+            case 'A' ... 'Z':
+            case '0' ... '9':
+            case '_':
+                // NOT end of identifier
+                position = start;
+                return false;
+            default:
+                return true;
+        }
     }
 
     LANG_forceinline bool match(std::string_view str, char last)
@@ -252,7 +282,7 @@ struct Scanner
             }
         }
         token.string = {
-            .value = source.substr(start, position - start - 1),
+            .value = sub(start, position - start - 1),
             .has_escapes = any_escapes,
         };
     }
@@ -262,14 +292,14 @@ struct Scanner
         auto start = position;
         while (advance() != '"');
         auto content_start = position;
-        auto term = std::string_view(source.data() + start, position - start - 1);
+        auto term = std::string_view(source + start, position - start - 1);
         if (term.empty()) {
             while (advance() != '"' || !match('\''));
         } else {
             while (advance() != '"' || !match(term, '\''));
         }
         token.string = {
-            .value = source.substr(content_start, position - term.size() - content_start - 2),
+            .value = sub(content_start, position - term.size() - content_start - 2),
         };
     }
 
@@ -292,7 +322,7 @@ struct Scanner
         }
     end:
         token.identifier = {
-            .value = source.substr(token.file_offset, position - token.file_offset),
+            .value = sub(token.file_offset, position - token.file_offset),
         };
     }
 
@@ -440,7 +470,7 @@ struct Scanner
 
         }
         token.number = {
-            .value = source.substr(token.file_offset, position - token.file_offset),
+            .value = sub(token.file_offset, position - token.file_offset),
             .base = base,
         };
         // log_debug("ending number, start = {}, end = {}, value = '{}'", token.file_offset, position, token.number.value);
@@ -545,12 +575,15 @@ struct Scanner
 // -----------------------------------------------------------------------------
 
     LANG_forceinline
+    Token make_token(TokenType type)
+    {
+        token.type = type;
+        return token;
+    }
+
+    LANG_forceinline
     Token next() try
     {
-        #define return_token(_type) do { token.type = _type; return token; } while (0)
-        // #define return_token(_type) do { token.type = _type; log_warn("type: {}", get_token_type_name(_type)); return token; } while (0)
-        // #define return_token(_type) do { token.type = _type; log_warn("{}", source.substr(start, position - start)); return token; while (0)
-
         token = {
             .line = line,
             .file_offset = u32(position),
@@ -560,7 +593,7 @@ struct Scanner
             uint8_t c = advance();
             switch (c) {
                 case '\0':
-                    return_token(TokenTypes::Eof);
+                    return make_token(TokenTypes::Eof);
                 case '\n':
                     line++;
                     token.line = line;
@@ -577,51 +610,51 @@ struct Scanner
 
                 case '0':
                     finish_zero_prefixed_number();
-                    return_token(TokenTypes::Number);
+                    return make_token(TokenTypes::Number);
                 case '1' ... '9':
                     finish_decimal(c);
-                    return_token(TokenTypes::Number);
+                    return make_token(TokenTypes::Number);
 
-                case '^': return_token(punc("^"));
-                case '(': return_token(punc("("));
-                case ')': return_token(punc(")"));
-                case '{': return_token(punc("{"));
-                case '}': return_token(punc("}"));
-                case '[': return_token(punc("["));
-                case ']': return_token(punc("]"));
-                case ':': return_token(punc(":"));
-                case ';': return_token(punc(";"));
-                case ',': return_token(punc(","));
-                case '?': return_token(punc("?"));
+                case '^': return make_token(punc("^"));
+                case '(': return make_token(punc("("));
+                case ')': return make_token(punc(")"));
+                case '{': return make_token(punc("{"));
+                case '}': return make_token(punc("}"));
+                case '[': return make_token(punc("["));
+                case ']': return make_token(punc("]"));
+                case ':': return make_token(punc(":"));
+                case ';': return make_token(punc(";"));
+                case ',': return make_token(punc(","));
+                case '?': return make_token(punc("?"));
 
-                case '/': if (match('=')) { return_token(punc("/=")); } else { return_token(punc("/")); }
-                case '%': if (match('=')) { return_token(punc("%=")); } else { return_token(punc("%")); }
-                case '!': if (match('=')) { return_token(punc("!=")); } else { return_token(punc("!")); }
-                case '=': if (match('=')) { return_token(punc("==")); } else { return_token(punc("=")); }
-                case '&': if (match('=')) { return_token(punc("&=")); } else { return_token(punc("&")); }
-                case '|': if (match('=')) { return_token(punc("|=")); } else { return_token(punc("|")); }
+                case '/': return make_token(match('=') ? punc("/=") : punc("/"));
+                case '%': return make_token(match('=') ? punc("%=") : punc("%"));
+                case '!': return make_token(match('=') ? punc("!=") : punc("!"));
+                case '=': return make_token(match('=') ? punc("==") : punc("="));
+                case '&': return make_token(match('=') ? punc("&=") : punc("&"));
+                case '|': return make_token(match('=') ? punc("|=") : punc("|"));
 
                 case '+':
-                    if (match('=')) return_token(punc("+="));
-                    if (match('+')) return_token(punc("++"));
-                    return_token(punc("+"));
+                    if (match('=')) return make_token(punc("+="));
+                    if (match('+')) return make_token(punc("++"));
+                    return make_token(punc("+"));
                 case '-':
-                    if (match('=')) return_token(punc("-="));
-                    if (match('-')) return_token(punc("--"));
-                    if (match(">")) return_token(punc("->"));
-                    return_token(punc("-"));
-                case '*': if (match('*')) { if (match('=')) { return_token(punc("**=")); } else { return_token(punc("**")); } } else { if (match('=')) { return_token(punc("*=")); } else { return_token(punc("*")); } }
-                case '<': if (match('<')) { if (match('=')) { return_token(punc("<<=")); } else { return_token(punc("<<")); } } else { if (match('=')) { return_token(punc("<=")); } else { return_token(punc("<")); } }
-                case '>': if (match('>')) { if (match('=')) { return_token(punc(">>=")); } else { return_token(punc(">>")); } } else { if (match('=')) { return_token(punc(">=")); } else { return_token(punc(">")); } }
-                case '~': if (match('|')) { if (match('=')) { return_token(punc("~|=")); } else { return_token(punc("~|")); } } else { return_token(punc("~")); }
-                case '.': if (match('.')) { if (match('=')) { return_token(punc("..=")); } else { return_token(punc("..")); } } else { return_token(punc(".")); }
-                case '$': consume('{'); return_token(punc("${"));
+                    if (match('=')) return make_token(punc("-="));
+                    if (match('-')) return make_token(punc("--"));
+                    if (match(">")) return make_token(punc("->"));
+                    return make_token(punc("-"));
+                case '*': return make_token(match('*') ? (match('=') ? punc("**=") : punc("**")) : (match('=') ? punc("*=") : punc("*")));
+                case '<': return make_token(match('<') ? (match('=') ? punc("<<=") : punc("<<")) : (match('=') ? punc("<=") : punc("<")));
+                case '>': return make_token(match('>') ? (match('=') ? punc(">>=") : punc(">>")) : (match('=') ? punc(">=") : punc(">")));
+                case '~': return make_token(match('|') ? (match('=') ? punc("~|=") : punc("~|")) : punc("~"));
+                case '.': return make_token(match('.') ? (match('=') ? punc("..=") : punc("..")) : punc("."));
+                case '$': consume('{'); return make_token(punc("${"));
                 case '\\':
-                    if (match('{')) return_token(punc("\\{"));
+                    if (match('{')) return make_token(punc("\\{"));
                     if (match('i')) {
                         consume('d');
                         consume('{');
-                        return_token(punc("\\id{"));
+                        return make_token(punc("\\id{"));
                     }
                     report_error(position, position - 1, "expected {{ or id{{ to follow \\");
 
@@ -631,78 +664,79 @@ struct Scanner
                     break;
 
                 case '@':
-                    if (match("as"))     { return_token(keyword("@as")); }
-                    if (match("typeOf")) { return_token(keyword("@typeOf")); }
-                    report_error(position - 1, position, "invalid intrinsic");
+                    if (match_identifier("as"))     return make_token(keyword("@as"));
+                    if (match_identifier("typeOf")) return make_token(keyword("@typeOf"));
+                    finish_identifier();
+                    report_error(token.file_offset, position - 1, "invalid intrinsic");
 
                 case '"':
                     finish_string();
-                    return_token(TokenTypes::String);
+                    return make_token(TokenTypes::String);
 
                 case '\'':
                     finish_rawstring();
-                    return_token(TokenTypes::String);
+                    return make_token(TokenTypes::String);
 
                 case 'a':
-                    if (match("nd")) { return_token(keyword("and")); }
+                    if (match_identifier("nd")) return make_token(keyword("and"));
                     goto identifier;
                 case 'b':
-                    if (match("reak")) { return_token(keyword("break")); }
+                    if (match_identifier("reak")) return make_token(keyword("break"));
                     goto identifier;
                 case 'c':
-                    if (match("ontinue")) { return_token(keyword("continue")); }
+                    if (match_identifier("ontinue")) return make_token(keyword("continue"));
                     goto identifier;
                 case 'd':
-                    if (match("efer")) { return_token(keyword("defer")); }
+                    if (match_identifier("efer")) return make_token(keyword("defer"));
                     goto identifier;
                 case 'e':
-                    if (match("lse")) { return_token(keyword("else")); }
-                    if (match("num")) { return_token(keyword("enum")); }
+                    if (match_identifier("lse")) return make_token(keyword("else"));
+                    if (match_identifier("num")) return make_token(keyword("enum"));
                     goto identifier;
                 case 'f':
-                    if (match("n"))    { return_token(keyword("fn")); }
-                    if (match("or"))   { return_token(keyword("for")); }
-                    if (match("alse")) { return_token(keyword("false")); }
+                    if (match_identifier("n"))    return make_token(keyword("fn"));
+                    if (match_identifier("or"))   return make_token(keyword("for"));
+                    if (match_identifier("alse")) return make_token(keyword("false"));
                     goto identifier;
                 case 'g':
                 case 'h':
                     goto identifier;
                 case 'i':
-                    if (match("f")) { return_token(keyword("if")); }
+                    if (match_identifier("f")) return make_token(keyword("if"));
                     goto identifier;
                 case 'j':
                 case 'k':
                 case 'l':
                     goto identifier;
                 case 'm':
-                    if (match("atch")) { return_token(keyword("match")); }
+                    if (match_identifier("atch")) return make_token(keyword("match"));
                     goto identifier;
                 case 'n':
-                    if (match("ull")) { return_token(keyword("null")); }
+                    if (match_identifier("ull")) return make_token(keyword("null"));
                     goto identifier;
                 case 'o':
-                    if (match("r")) { return_token(keyword("or")); }
+                    if (match_identifier("r")) return make_token(keyword("or"));
                     goto identifier;
                 case 'p':
                 case 'q':
                     goto identifier;
                 case 'r':
-                    if (match("eturn")) { return_token(keyword("return")); }
+                    if (match_identifier("eturn")) return make_token(keyword("return"));
                     goto identifier;
                 case 's':
-                    if (match("lse"))   { return_token(keyword("else")); }
-                    if (match("truct")) { return_token(keyword("struct")); }
+                    if (match_identifier("lse"))   return make_token(keyword("else"));
+                    if (match_identifier("truct")) return make_token(keyword("struct"));
                     goto identifier;
                 case 't':
-                    if (match("rue")) { return_token(keyword("true")); }
+                    if (match_identifier("rue")) return make_token(keyword("true"));
                     goto identifier;
                 case 'u':
-                    if (match("ndefined")) { return_token(keyword("undefined")); }
+                    if (match_identifier("ndefined")) return make_token(keyword("undefined"));
                     goto identifier;
                 case 'v':
                     goto identifier;
                 case 'w':
-                    if (match("hile")) { return_token(keyword("while")); }
+                    if (match_identifier("hile")) return make_token(keyword("while"));
                     goto identifier;
                 case 'x':
                 case 'y':
@@ -719,30 +753,28 @@ struct Scanner
 
                 identifier:
                     finish_identifier();
-                    return_token(TokenTypes::Identifier);
+                    return make_token(TokenTypes::Identifier);
             }
         }
 
         std::unreachable();
-
-        #undef return_token
     }
     catch (StopScanFlag) {
         return InvalidToken;
     }
 
-    bool init(ErrorList& errors, std::string_view source)
+    bool init(ErrorList& errors, const char* source, usz source_len)
     {
         *this = {
             .errors = &errors,
             .source = source,
+            .source_len = source_len,
         };
 
-        auto res = simdutf::validate_utf8_with_errors(std::string_view(source.data(), source.size()));
+        auto res = simdutf::validate_utf8_with_errors(std::string_view(source, source_len));
         if (res.is_err()) {
             errors.errors.emplace_back(Error {
                 .line = 0,
-                // .file_offset = 0,
                 .head_file_offset = 0,
                 .tail_file_offset = 0,
                 .message = std::format("source not valid UTF-8: {}", simdutf_err_to_string(res.error)),

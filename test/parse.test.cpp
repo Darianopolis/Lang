@@ -21,7 +21,7 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
 
     Scanner scanner;
 
-    scanner.init(errors, input);
+    scanner.init(errors, input.data(), input.size());
 
     u32 i = 0;
     while (auto token = scanner.next()) {
@@ -51,7 +51,7 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
 
     if (!expected_ast.empty()) {
         Ast ast;
-        scanner.init(errors, input);
+        scanner.init(errors, input.data(), input.size());
         auto offset = parse(ast, &scanner, constants);
         Ast compacted;
         ast_compact(constants, ast, offset, compacted);
@@ -103,9 +103,9 @@ TestResults test_positives()
     auto str = [&](std::string_view value)          -> Token { return {TokenTypes::String, 0, 0, {.string = {value}}};         };
     auto id  = [&](std::string_view value)          -> Token { return {TokenTypes::Identifier, 0, 0, {.identifier = {value}}}; };
 
-    auto _num =  [&](std::string_view val) { return constants.numbers.get_id(val);     };
-    auto _id =   [&](std::string_view val) { return constants.identifiers.get_id(val); };
-    auto ast  =  [&](AstHeader header)     { return std::to_underlying(header);        };
+    auto _num = [&](std::string_view val) { return constants.numbers.get_id(val);     };
+    auto _id  = [&](std::string_view val) { return constants.identifiers.get_id(val); };
+    auto ast  = [&](AstHeader header)     { return std::to_underlying(header);        };
 
     TestResults res;
 
@@ -145,13 +145,24 @@ TestResults test_positives()
 
     // comments
     res += test_scan_parse(constants, "# 0123",             {            });
-    res += test_scan_parse(constants, "#[\n,pmqg79\n] 123", { num("123") });
+    res += test_scan_parse(constants, "#[\n,#[[#[]]]pmqg79\n] 123", { num("123") });
 
     // keywords
     {
         TestResults tmp;
+
+        std::array terminators = { 'a', 'z', 'A', 'Z', '0', '9', '_' };
+        usz t_index = 0;
+
         for (auto& k : Keywords) {
             tmp += test_scan_parse(constants, k, { {keyword_runtime(k)} });
+
+            if (k[0] != '@') {
+                std::string non_keyword = k;
+                non_keyword += terminators[t_index];
+                t_index = (t_index + 1) % terminators.size();
+                tmp += test_scan_parse(constants, non_keyword, { {id(non_keyword)} });
+            }
         }
         res += tmp.collapse();
     }
@@ -223,7 +234,7 @@ TestResults scan_fuzz()
         errors.clear();
         {
             // LogLevelGuard _{LogLevel::Fatal};
-            scanner.init(errors, input);
+            scanner.init(errors, input.data(), input.size());
             while (scanner.next());
         }
         // for (auto err : errors) err.print(input);

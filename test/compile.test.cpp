@@ -27,7 +27,7 @@ main :: fn() -> i32 {
 
     ErrorList errors;
     Scanner scanner;
-    scanner.init(errors, program);
+    scanner.init(errors, program.data(), input.size());
 
     Compiler compiler;
     compiler.init();

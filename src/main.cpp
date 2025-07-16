@@ -21,8 +21,6 @@ void samples()
     //     if (i % 2) message[i] = '0';
     //     else message[i] = 'a';
     // }
-    // message.resize(message.size() + 10);
-    // PaddedStringView input{ message.data(), message.size() - 10 };
     // auto message = read_file("test/test.lang");
 
     // auto message = read_file("test/vulkan_test.lang");
@@ -205,7 +203,6 @@ x :: 123;
 
 )";
 #endif
-    auto input = std::string_view(message);
 
     log_debug("scanning...");
 
@@ -221,7 +218,7 @@ x :: 123;
     auto indent_str = ". ";
     i32 indent = 0;
 
-    scanner.init(errors, input);
+    scanner.init(errors, message.data(), message.size());
     auto start = std::chrono::steady_clock::now();
 
     usz token_count = 0;
@@ -271,7 +268,7 @@ x :: 123;
 #if 1
     start = std::chrono::steady_clock::now();
     Ast ast;
-    scanner.init(errors, message);
+    scanner.init(errors, message.data(), message.size());
     auto offset = parse(ast, &scanner, constants);
     end = std::chrono::steady_clock::now();
 

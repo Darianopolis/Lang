@@ -52,7 +52,7 @@ struct CodeGenerator
         while (next) {
             // println("--- {}", (next + 1).value);
             fn(next + 1);
-            next = *ast->pointer_to(next);
+            next = ast->at(next);
         }
     }
 
@@ -64,7 +64,7 @@ struct CodeGenerator
         bool foldable = true;
         while (offset) {
             foldable &= can_fold(offset + 1);
-            offset = *ast->pointer_to(offset);
+            offset = ast->at(offset);
             if (offset) {
                 foldable = false;
             }
@@ -138,7 +138,7 @@ struct CodeGenerator
 
     void generate_block(AstOffset offset, u32 target) {
         while (offset) {
-            auto next = *ast->pointer_to(offset);
+            auto next = ast->at(offset);
             generate(offset + 1, next ? target : 0);
             offset = next;
         }
@@ -373,7 +373,7 @@ void print_annotations(Compiler* compiler, AnnotatedFragment& annotated_fragment
 
             while (next) {
                 print_node(next + 1, depth);
-                next = *ast.pointer_to(next);
+                next = ast.at(next);
             }
             // compacted.write(AstOffset{});
         };

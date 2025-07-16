@@ -101,7 +101,9 @@ def hg_source(name, url):
 
     if os.path.exists(f"{path}"):
         if args.update:
-            panic("TODO")
+            log_warn(f"Skipping update check for mercurial source [{path}]")
+            # log_info(f"Updating [{name}]")
+            # subprocess.Popen(["hg", "pull", "-u"], executable = hg_path, cwd = path).wait()
     else:
         log_info(f"Cloning [{name}]")
         subprocess.Popen(["hg", "clone", url, path], executable = hg_path).wait()
@@ -289,6 +291,30 @@ def build():
         log_info_progress_end()
 
     log_info_progress_end()
+
+# -----------------------------------------------------------------------------
+
+define("BOOST_USE_UCONTEXT")
+boost_projects = [
+    ("coroutine2", []),
+    ("context", [
+        "posix/stack_traits.cpp",
+        "continuation.cpp",
+        "fcontext.cpp",
+        "fiber.cpp",
+        "asm/jump_x86_64_sysv_elf_gas.S",
+        "asm/make_x86_64_sysv_elf_gas.S",
+        "asm/ontop_x86_64_sysv_elf_gas.S",
+    ]),
+    ("assert", []),
+    ("config", []),
+    ("predef", []),
+]
+for (proj, proj_sources) in boost_projects:
+    proj_dir = git_source(f"boost_{proj}", f"https://github.com/boostorg/{proj}", "develop")
+    include(f"{proj_dir}/include")
+    for src in proj_sources:
+        source(f"{proj_dir}/src/{src}", external = True)
 
 # -----------------------------------------------------------------------------
 

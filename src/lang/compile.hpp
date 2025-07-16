@@ -231,7 +231,7 @@ struct Annotator
         while (next) {
             // println("--- {}", (next + 1).value);
             fn(next + 1);
-            next = *ast->pointer_to(next);
+            next = ast->at(next);
         }
     }
 
