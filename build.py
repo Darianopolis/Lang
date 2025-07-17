@@ -138,10 +138,14 @@ compiler_warning_flags = [
     "-Wimplicit-fallthrough",
 ]
 
+build_mode_debug = "Debug"
+build_mode_relwithdebifno = "RelWithDebInfo"
+build_mode_release = "Release"
+
 build_mode_flags = {
-    "Debug":          [ "-g", "-O0", "-fsanitize=undefined,address" ],
-    "RelWithDebInfo": [ "-g", "-O2", "-fno-omit-frame-pointer" ],
-    "Release":        [ "-O2" ],
+    build_mode_debug:          [ "-g", "-O0", "-fsanitize=undefined,address" ],
+    build_mode_relwithdebifno: [ "-g", "-O2", "-fno-omit-frame-pointer" ],
+    build_mode_release:        [ "-O2" ],
 }
 
 # simd_flags = [ "-mavx512f", "-mavx512vl", "-mavx512bw" ]
@@ -157,9 +161,21 @@ def define(v):
     global defines
     defines += [v]
 
-def source(file, external):
+def source_no_glob(file):
     global sources
+    external = Path(file).is_relative_to(Path(vendor_folder))
+    # log_debug(f"Sourcing [{file}], external = {external}")
     sources += [(file, external)]
+
+def source(path):
+    if '**' in path:
+        for path in glob.glob(path, recursive = True):
+            source_no_glob(path)
+    elif '*' in path:
+        for path in glob.glob(path, recursive = False):
+            source_no_glob(path)
+    else:
+        source_no_glob(path)
 
 def include(dir):
     global includes
@@ -294,17 +310,31 @@ def build():
 
 # -----------------------------------------------------------------------------
 
+mimalloc_dir = git_source("mimalloc", "https://github.com/microsoft/mimalloc.git", "main")
+include(f"{mimalloc_dir}/include")
+if (build_mode == build_mode_debug):
+    define("MI_TRACK_ASAN")
+source(f"{mimalloc_dir}/src/prim/*.c")
+for f in ["options", "libc", "os", "init", "stats", "random", "heap", "arena", "bitmap",
+          "page", "alloc", "segment-map", "alloc-posix", "alloc-aligned", "segment"]:
+    source(f"{mimalloc_dir}/src/{f}.c")
+
+# -----------------------------------------------------------------------------
+
+boost_platform = "posix"
+boost_asm_target = "x86_64_sysv_elf"
+
 define("BOOST_USE_UCONTEXT")
 boost_projects = [
     ("coroutine2", []),
     ("context", [
-        "posix/stack_traits.cpp",
+        f"{boost_platform}/stack_traits.cpp",
         "continuation.cpp",
         "fcontext.cpp",
         "fiber.cpp",
-        "asm/jump_x86_64_sysv_elf_gas.S",
-        "asm/make_x86_64_sysv_elf_gas.S",
-        "asm/ontop_x86_64_sysv_elf_gas.S",
+        f"asm/jump_{boost_asm_target}_gas.S",
+        f"asm/make_{boost_asm_target}_gas.S",
+        f"asm/ontop_{boost_asm_target}_gas.S",
     ]),
     ("assert", []),
     ("config", []),
@@ -314,12 +344,12 @@ for (proj, proj_sources) in boost_projects:
     proj_dir = git_source(f"boost_{proj}", f"https://github.com/boostorg/{proj}", "develop")
     include(f"{proj_dir}/include")
     for src in proj_sources:
-        source(f"{proj_dir}/src/{src}", external = True)
+        source(f"{proj_dir}/src/{src}")
 
 # -----------------------------------------------------------------------------
 
-dyncall_dir = hg_source("dyncall", "https://dyncall.org/pub/dyncall/dyncall/")
-include(f"{dyncall_dir}")
+# dyncall_dir = hg_source("dyncall", "https://dyncall.org/pub/dyncall/dyncall/")
+# include(f"{dyncall_dir}")
 # link(f"{dyncall_dir}/dynload/libdynload_s.a")
 # link(f"{dyncall_dir}/dyncall/libdyncall_s.a")
 
@@ -327,12 +357,8 @@ include(f"{dyncall_dir}")
 
 # zstd_dir = git_source("zstd", "https://github.com/facebook/zstd.git", "dev")
 # include(f"{zstd_dir}/lib")
-# for d in [
-#     "common",
-#     "compress",
-# ]:
-#     for s in glob.glob(f"{zstd_dir}/lib/{d}/*.c"):
-#         source(s, external = True)
+# for d in [ "common", "compress"]:
+#     source(f"{zstd_dir}/lib/{d}/*.c")
 
 # -----------------------------------------------------------------------------
 
@@ -343,15 +369,15 @@ include(f"{unordered_dense_dir}/include")
 
 simdutf_dir = git_source("simdutf", "https://github.com/simdutf/simdutf.git", "master")
 simdutf_src = f"{simdutf_dir}/src/simdutf.cpp"
-source(simdutf_src, external = True)
+source(simdutf_src)
 source_include(simdutf_src, f"{simdutf_dir}/src")
 include(f"{simdutf_dir}/include")
 
 # -----------------------------------------------------------------------------
 
-# simdjson_dir = git_source("simdjson", "https://github.com/simdjson/simdjson.git", "master")
+# simdjson_dir = git_source("simdjson", "https://github.com/simdjson/simdjson.git", "v3.13.0")
 # simdjson_src = f"{simdjson_dir}/src/simdjson.cpp"
-# source(simdjson_src, external = True)
+# source(simdjson_src)
 # source_include(simdjson_src, f"{simdjson_dir}/src")
 # include(f"{simdjson_dir}/include")
 
@@ -361,16 +387,14 @@ backward_dir = git_source("backward-cpp", "https://github.com/bombela/backward-c
 if is_linux:
     define("BACKWARD_HAS_BFD=1")
     path_link("bfd")
-source(f"{backward_dir}/backward.cpp", external = True)
+source(f"{backward_dir}/backward.cpp")
 
 # -----------------------------------------------------------------------------
 
-for s in glob.glob("src/**/*.cpp", recursive = True):
-    source(s, external = False)
+source("src/**/*.cpp")
 include("src")
 
-for s in glob.glob("test/**/*.cpp", recursive = True):
-    source(s, external = False)
+source("test/**/*.cpp")
 include("test")
 
 # -----------------------------------------------------------------------------

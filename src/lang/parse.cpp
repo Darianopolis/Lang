@@ -183,6 +183,24 @@ struct Parser
     Token token;
     bool need_advance = true;
 
+    struct BlockContents
+    {
+        AstOffset first;
+        bool last_is_terminal;
+
+        u16 flags_as_main()
+        {
+            return (first ? Ast_Node_HasMainBlock : 0)
+                | (last_is_terminal ? Ast_Node_MainBlockHasTerminal : 0);
+        }
+
+        u16 flags_as_alt()
+        {
+            return (first ? Ast_Node_HasAlternativeBlock : 0)
+                | (last_is_terminal ? Ast_Node_AlternativeBlockHasTerminal : 0);
+        }
+    };
+
 #if LANG_NOISY_PARSER
     i32 _depth = 0;
 #endif
@@ -244,7 +262,7 @@ struct Parser
 
 // -------------------------------------------------------------------------
 
-    AstOffset maybe_else()
+    BlockContents maybe_else()
     {
         LANG_PARSER_TRACE_FUNC("");
 
@@ -254,7 +272,7 @@ struct Parser
             } else {
                 AstListBuilder builder{ast};
                 builder.add(block_expr());
-                return builder.to_list();
+                return {builder.to_list(), false};
             }
         }
 
@@ -270,11 +288,14 @@ struct Parser
         auto then_branch = finish_block_contents();
         auto else_branch = maybe_else();
 
-        auto offset = ast.write(else_branch ? AstHeader::IfElse : AstHeader::If);
+        AstHeader header{AstNodeType::If};
+        header.flags |= then_branch.flags_as_main();
+        header.flags |= else_branch.flags_as_alt();
+        auto offset = ast.write(header);
         ast.write(expr);
-        ast.write(then_branch);
-        if (else_branch) {
-            ast.write(else_branch);
+        ast.write(then_branch.first);
+        if (else_branch.first) {
+            ast.write(else_branch.first);
         }
 
         return offset;
@@ -297,12 +318,15 @@ struct Parser
 
         auto else_expr = maybe_else();
 
-        auto offset = ast.write(else_expr ? AstHeader::ForElse : AstHeader::For);
+        AstHeader header{AstNodeType::For};
+        header.flags |= body.flags_as_main();
+        header.flags |= else_expr.flags_as_alt();
+        auto offset= ast.write(header);
         ast.write(range_expr);
         ast.write(params);
-        ast.write(body);
-        if (else_expr) {
-            ast.write(else_expr);
+        ast.write(body.first);
+        if (else_expr.first) {
+            ast.write(else_expr.first);
         }
 
         return offset;
@@ -317,11 +341,14 @@ struct Parser
         auto body = finish_block_contents();
         auto else_expr = maybe_else();
 
-        auto offset = ast.write(else_expr ? AstHeader::WhileElse : AstHeader::While);
+        AstHeader header{AstNodeType::While};
+        header.flags |= body.flags_as_main();
+        header.flags |= else_expr.flags_as_alt();
+        auto offset= ast.write(header);
         ast.write(cond);
-        ast.write(body);
-        if (else_expr) {
-            ast.write(else_expr);
+        ast.write(body.first);
+        if (else_expr.first) {
+            ast.write(else_expr.first);
         }
 
         return offset;
@@ -363,8 +390,8 @@ struct Parser
         if (match(keyword("defer"))) {
             consume(punc("{"), "expected '{' to start defer body");
             auto body = finish_block_contents();
-            auto offset = ast.write(AstHeader::Defer);
-            ast.write(body);
+            auto offset = ast.write({AstNodeType::Defer});
+            ast.write(body.first);
             return offset;
         }
         return {};
@@ -391,11 +418,13 @@ struct Parser
         return {expr, !match(punc(";"))};
     }
 
-    AstOffset finish_block_contents()
+    BlockContents finish_block_contents()
     {
         LANG_PARSER_TRACE_FUNC("");
 
         AstListBuilder builder{ast};
+
+        bool last_is_terminal = false;
 
         while (!is(punc("}"))) {
             auto[stmt, is_terminal] = statement();
@@ -407,14 +436,14 @@ struct Parser
             builder.add(stmt);
 
             if (is_terminal) {
-                // terminal = stmt;
+                last_is_terminal = true;
                 break;
             }
         }
 
         consume(punc("}"), "expected '}' to terminate block");
 
-        return builder.to_list();
+        return {builder.to_list(), last_is_terminal};
     }
 
     AstOffset finish_block()
@@ -423,8 +452,8 @@ struct Parser
 
         auto first = finish_block_contents();
 
-        auto offset = ast.write(AstHeader::Block);
-        ast.write(first);
+        auto offset = ast.write({AstNodeType::Block, first.flags_as_main()});
+        ast.write(first.first);
 
         return offset;
     }
@@ -462,7 +491,7 @@ struct Parser
             raise_error("expected end of file, got {}", get_token_type_name(peek().type));
         }
 
-        auto offset = ast.write(AstHeader::File);
+        auto offset = ast.write({AstNodeType::File});
         ast.write(builder.to_list());
 
         return offset;
@@ -476,7 +505,7 @@ struct Parser
         auto ident = peek();
         if (ident.type == TokenTypes::Identifier) {
             advance();
-            target = ast.write(AstHeader::Identifier);
+            target = ast.write({AstNodeType::Identifier});
             ast.write(constants->identifiers.get_id(ident.identifier.value));
         } else if (ident.type != punc(":")) {
             raise_error("expected identifier or ':' to begin parameter");
@@ -485,7 +514,7 @@ struct Parser
         if (match(punc(":"))) {
             return finish_var_decl(target);
         } else {
-            auto offset = ast.write(get_vardecl_header(true, false, false));
+            auto offset = ast.write(AstHeader{AstNodeType::VarDecl, Ast_VarDecl_IsConstant});
             ast.write(target);
             return offset;
         }
@@ -553,13 +582,13 @@ struct Parser
         }
         if (match(punc("{"))) {
             auto body = finish_block_contents();
-            auto offset = ast.write(AstHeader::Function_Definition);
+            auto offset = ast.write({AstNodeType::Function, body.flags_as_main()});
             ast.write(params);
             ast.write(return_type);
-            ast.write(body);
+            ast.write(body.first);
             return offset;
         } else {
-            auto offset = ast.write(AstHeader::Function_Prototype);
+            auto offset = ast.write({AstNodeType::Function});
             ast.write(params);
             ast.write(return_type);
             return offset;
@@ -698,7 +727,7 @@ struct Parser
     AstOffset named_identifier_unchecked()
     {
         auto token = advance();
-        auto offset = ast.write(AstHeader::Identifier);
+        auto offset = ast.write({AstNodeType::Identifier});
         if (token.type == TokenTypes::Identifier) {
             // pure identifier
             ast.write(constants->identifiers.get_id(token.identifier.value));
@@ -719,10 +748,10 @@ struct Parser
             PARSE_MaybeBlockExpr
             case keyword("true"):
                 advance();
-                return ast.write(AstHeader::Literal_True);
+                return ast.write({AstNodeType::Boolean, Ast_Boolean_True});
             case keyword("false"):
                 advance();
-                return ast.write(AstHeader::Literal_False);
+                return ast.write({AstNodeType::Boolean, 0});
             case keyword("enum"):
                 advance();
                 raise_error("TODO");
@@ -737,13 +766,19 @@ struct Parser
                 // return finish_match();
             case TokenTypes::Number: {
                 advance();
-                auto offset = ast.write(AstHeader::Literal_Number);
+                AstHeader header{AstNodeType::Number};
+                if      (next.number.base == 2)  header.flags |= Ast_Number_Base2;
+                else if (next.number.base == 8)  header.flags |= Ast_Number_Base8;
+                else if (next.number.base == 10) header.flags |= Ast_Number_Base10;
+                else if (next.number.base == 16) header.flags |= Ast_Number_Base16;
+                else raise_error("invalid base: {}", next.number.base);
+                auto offset = ast.write(header);
                 ast.write(constants->numbers.get_id(next.number.value));
                 return offset;
             }
             case TokenTypes::String: {
                 advance();
-                auto offset = ast.write(AstHeader::Literal_String);
+                auto offset = ast.write({AstNodeType::String});
                 if (next.string.has_escapes) {
                     raise_error("TODO: Handle interning of escaped strings");
                 }
@@ -795,7 +830,11 @@ struct Parser
             init = expression(Operator::VarDecl);
         }
 
-        auto offset = ast.write(get_vardecl_header(constant, bool(type_expr), has_init));
+        AstHeader header{AstNodeType::VarDecl};
+        if (constant) header.flags |= Ast_VarDecl_IsConstant;
+        if (type_expr) header.flags |= Ast_VarDecl_HasType;
+        if (has_init) header.flags |= Ast_VarDecl_HasInit;
+        auto offset = ast.write(header);
         ast.write(target);
         if (type_expr) ast.write(type_expr);
         if (has_init) ast.write(init);
@@ -818,10 +857,10 @@ struct Parser
             #define X(name, ...) \
                 case Operator::name: { \
                     if (is_end_of_expression_token(peek())) { \
-                        lhs = ast.write(AstHeader::name##_Empty); \
+                        lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity0 | std::to_underlying(Operator::name))}); \
                     } else { \
                         auto rhs = expression(op, mode); \
-                        lhs = ast.write(AstHeader::name); \
+                        lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
                         ast.write(rhs); \
                     } \
                     break; \
@@ -832,7 +871,7 @@ struct Parser
             #define X(name, ...) \
                 case Operator::name: { \
                     auto rhs = expression(op, mode); \
-                    lhs = ast.write(AstHeader::name); \
+                    lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
                     ast.write(rhs); \
                     break; \
                 }
@@ -879,7 +918,7 @@ struct Parser
                         auto field = advance();
                         if (field.type != TokenTypes::Identifier)
                             raise_error("expected field following field access operator '.', got {}", get_token_type_name(field.type));
-                        auto new_lhs = ast.write(AstHeader::FieldAccess);
+                        auto new_lhs = ast.write({AstNodeType::FieldAccess});
                         ast.write(constants->identifiers.get_id(field.identifier.value));
                         ast.write(lhs);
                         lhs = new_lhs;
@@ -888,7 +927,7 @@ struct Parser
                     case Operator::Call: {
                         auto args = arguments(punc(")"));
                         consume(punc(")"), "expected ')' to terminate call");
-                        auto new_lhs = ast.write(AstHeader::Call);
+                        auto new_lhs = ast.write({AstNodeType::Call});
                         ast.write(lhs);
                         ast.write(args);
                         lhs = new_lhs;
@@ -897,7 +936,7 @@ struct Parser
                     case Operator::Subscript: {
                         auto args = arguments(punc("]"));
                         consume(punc("]"), "expected ']' to terminate subscript");
-                        auto new_lhs = ast.write(AstHeader::Subscript);
+                        auto new_lhs = ast.write({AstNodeType::Subscript});
                         ast.write(lhs);
                         ast.write(args);
                         lhs = new_lhs;
@@ -905,7 +944,7 @@ struct Parser
                     }
                 #define X(name, ...) case Operator::name: \
                     { \
-                        auto new_lhs = ast.write(AstHeader::name); \
+                        auto new_lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
                         ast.write(lhs); \
                         lhs = new_lhs; \
                         break; \
@@ -922,7 +961,7 @@ struct Parser
                 switch (op) {
                 #define X(name, ...) \
                     case Operator::name: { \
-                        auto new_lhs = ast.write(AstHeader::name); \
+                        auto new_lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity2 | std::to_underlying(Operator::name))}); \
                         ast.write(lhs); \
                         ast.write(rhs); \
                         lhs = new_lhs; \

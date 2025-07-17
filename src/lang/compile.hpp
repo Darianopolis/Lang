@@ -213,7 +213,7 @@ struct Annotator
     std::pair<u32*, AstHeader> get_ip_header(AstOffset offset)
     {
         auto ip = ast->pointer_to(offset);
-        return { ip, AstHeader{*ip} };
+        return { ip, std::bit_cast<AstHeader>(*ip) };
     }
 
     ComptimeEvaluateResult annotate_this(AstOffset offset, ComptimeEvaluateResult result, Ptr<Function> function = {})
@@ -255,7 +255,7 @@ struct Annotator
         println(".Target = {}", to_string(target.value));
 
         Ptr<Type> type;
-        if (ast_vardecl_header_has_type(header)) {
+        if (header.flags & Ast_VarDecl_HasType) {
             auto res = annotate(*ip++, locals_depth);
             if (!res.value) {
                 raise_error("type expression must have constant value");
@@ -269,7 +269,7 @@ struct Annotator
         }
 
         ComptimeEvaluateResult init;
-        if (ast_vardecl_header_has_init(header)) {
+        if (header.flags & Ast_VarDecl_HasInit) {
             init = annotate(*ip++, locals_depth);
             if (!init.type) {
                 raise_error("init does not return valid type");
@@ -324,13 +324,17 @@ struct Annotator
     {
         auto[ip, header] = get_ip_header(offset);
 
-        println("{} @ {}", get_ast_header_name(header), offset.value);
+        println("{} @ {}", get_ast_node_type_name(header.type), offset.value);
         print_depth++;
         defer { print_depth--; };
 
-        switch (header) {
-            case AstHeader::Function_Definition:
+        switch (header.type) {
+            case AstNodeType::Function:
             {
+                if (!(header.flags & Ast_Node_HasMainBlock)) {
+                    raise_error("can't annotate function prototype");
+                }
+
                 auto function = std::make_shared<Function>();
                 function->fragment = {ast, offset};
                 function->type = compiler->core_types.function_type;
@@ -338,7 +342,7 @@ struct Annotator
                 return annotate_this(offset, {function, function->type});
             }
 
-            case AstHeader::Identifier:
+            case AstNodeType::Identifier:
             {
                 auto ident = ip[1];
                 if (auto local = locals.find(locals_depth, ident)) {
@@ -354,19 +358,13 @@ struct Annotator
                 break;
             }
 
-            case AstHeader::VarDecl:
-            case AstHeader::VarDecl_Type:
-            case AstHeader::VarDecl_ConstInit:
-            case AstHeader::VarDecl_MutableInit:
-            case AstHeader::VarDecl_TypeConstInit:
-            case AstHeader::VarDecl_TypeMutableInit:
+            case AstNodeType::VarDecl:
             {
                 annotate_vardecl(offset, locals_depth);
                 return {};
             }
 
-            case AstHeader::If:
-            case AstHeader::IfElse:
+            case AstNodeType::If:
             {
                 auto cond = annotate(ip[1], locals_depth);
 
@@ -385,7 +383,7 @@ struct Annotator
                     auto cond_value = cond_value_ptr->value;
                     if (cond_value) {
                         return annotate_this(offset, annotate(ip[2], locals_depth));
-                    } else if (header == AstHeader::IfElse) {
+                    } else if (header.flags & Ast_Node_HasAlternativeBlock) {
                         return annotate_this(offset, annotate(ip[3], locals_depth));
                     } else {
                         return annotate_this(offset, {});
@@ -396,7 +394,7 @@ struct Annotator
                 auto then_eval = annotate_block(ip[2], locals_depth);
                 auto result = ComptimeEvaluateResult{nullptr, then_eval.type};
 
-                if (header == AstHeader::IfElse) {
+                if (header.flags & Ast_Node_HasAlternativeBlock) {
                     auto else_eval = annotate_block(ip[3], locals_depth);
                     if (then_eval.type != else_eval.type) {
                         log_warn("if/else branch results do not match, will evaluate to nothing");
@@ -407,7 +405,7 @@ struct Annotator
                 return annotate_this(offset, result);
             }
 
-            case AstHeader::Call:
+            case AstNodeType::Call:
             {
                 auto callee = annotate(ip[1], locals_depth);
 
@@ -429,10 +427,7 @@ struct Annotator
                 return annotate_this(offset, function->reify(*this, args), function);
             }
 
-            // TODO: Rest of operators
-            case AstHeader::Add:
-            case AstHeader::Subtract:
-            case AstHeader::Less:
+            case AstNodeType::Op:
             {
                 auto lhs = annotate(ip[1], locals_depth);
                 auto rhs = annotate(ip[2], locals_depth);
@@ -445,14 +440,20 @@ struct Annotator
                     result = lhs;
                 }
 
-                if (header == AstHeader::Less) {
-                    return annotate_this(offset, {nullptr, compiler->core_types.bool_type});
-                } else {
-                    return annotate_this(offset, result);
+                switch (ast_get_op_type(header)) {
+                #define X(type, ...) case Operator::type:
+                    OPS_Comparison
+                        return annotate_this(offset, {nullptr, compiler->core_types.bool_type});
+                    OPS_Arithmetic
+                        return annotate_this(offset, result);
+
+                    default:
+                        // TODO: Rest of operators
+                        raise_error("unsupported operator: {}", get_op_name(ast_get_op_type(header)));
                 }
             }
 
-            case AstHeader::Literal_Number:
+            case AstNodeType::Number:
             {
                 auto num_str = compiler->constants.numbers.from_id(ip[1]);
                 i32 value;
@@ -469,7 +470,7 @@ struct Annotator
             }
 
             default:
-                raise_error("unhandled AST node type: {}", get_ast_header_name(header));
+                raise_error("unhandled AST node type: {}", get_ast_node_type_name(header.type));
         }
     }
 };
@@ -496,26 +497,13 @@ ComptimeEvaluateResult Function::reify(Annotator& caller, std::span<const Compti
 
     annotator.for_each(ip[1], [&](AstOffset offset) {
         auto[ip, header] = annotator.get_ip_header(offset);
-        annotator.println("{}", get_ast_header_name(header));
+        annotator.println("{}", get_ast_node_type_name(header.type));
         annotator.print_depth++;
         defer { annotator.print_depth--; };
-        switch (header) {
-            case AstHeader::VarDecl:
-            case AstHeader::VarDecl_Type:
-            case AstHeader::VarDecl_ConstInit:
-            case AstHeader::VarDecl_MutableInit:
-            case AstHeader::VarDecl_TypeConstInit:
-            case AstHeader::VarDecl_TypeMutableInit:
-            {
-                // TODO: Compile time arguments and argument type checking
-                annotator.annotate_vardecl(offset, annotator.locals.locals.size());
-
-                break;
-            }
-
-            default:
-                raise_error("parameter list can only contain variable declarations");
+        if (header.type != AstNodeType::VarDecl) {
+            raise_error("parameter list may only contain variable declarations");
         }
+        annotator.annotate_vardecl(offset, annotator.locals.locals.size());
     });
 
     // TODO: Handle void functions

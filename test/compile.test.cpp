@@ -35,7 +35,7 @@ main :: fn() -> i32 {
     Ast ast;
     auto offset = parse(ast, &scanner, compiler.constants);
 
-    ast_print_flat(compiler.constants, ast);
+    // ast_print_flat(compiler.constants, ast);
     ast_print_tree(compiler.constants, ast, offset);
 
     compiler.add({&ast, offset});
@@ -57,7 +57,7 @@ main :: fn() -> i32 {
 
     for (auto& annotated_fragment : compiler.annotated_fragments) {
         log_info("---- Annotated Fragment ----");
-        print_annotations(&compiler, annotated_fragment);
+        // print_annotations(&compiler, annotated_fragment);
 
         CodeGenerator generator;
         generator.init(compiler, annotated_fragment);

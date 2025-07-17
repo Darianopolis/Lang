@@ -481,7 +481,7 @@ constexpr auto EofToken = Token { .type = TokenTypes::Eof };
     OPS_Assign \
     OPS_ControlFlow
 
-enum class Operator : u16
+enum class Operator : u8
 {
     None,
 
@@ -620,119 +620,98 @@ constexpr bool is_op_postfix(Operator op)
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-constexpr u32 AstHeader_Start = 0xFFFF'0000;
-
-#define AST_Headers(DO) \
-    DO(Literal_Number, = AstHeader_Start) \
-    DO(Literal_String) \
-    DO(Literal_True) \
-    DO(Literal_False) \
+#define AST_NodeTypes(DO) \
+    DO(File) \
+    DO(Block) \
+    DO(Defer) \
+    DO(Number) \
+    DO(String) \
+    DO(Boolean) \
     DO(Identifier) \
     DO(VarDecl) \
-    DO(VarDecl_Type) \
-    DO(VarDecl_ConstInit) \
-    DO(VarDecl_MutableInit) \
-    DO(VarDecl_TypeConstInit) \
-    DO(VarDecl_TypeMutableInit) \
-    DO(While) \
-    DO(WhileElse) \
-    DO(For) \
-    DO(ForElse) \
-    DO(Block) \
-    DO(File) \
     DO(If) \
-    DO(IfElse) \
-    DO(Function_Definition) \
-    DO(Function_Prototype) \
-    DO(Defer) \
+    DO(While) \
+    DO(For) \
+    DO(Function) \
+    DO(Op) \
+    DO(FieldAccess) \
+    DO(Call) \
+    DO(Subscript) \
 
-enum class AstHeader : u32
+enum class AstNodeType : u16
 {
-#define AST_Headers_DECLARE(name, ...) name __VA_ARGS__,
-    AST_Headers(AST_Headers_DECLARE)
-#define X(name, ...) name,
-    OPS_Prefix
-    OPS_Postfix
-    OPS_Arithmetic
-    OPS_Bitwise
-    OPS_Logical
-    OPS_Comparison
-    OPS_Range
-    OPS_Assign
-#undef X
-#define X(name, ...) name, name##_Empty,
-    OPS_ControlFlow
-#undef X
-    End  = ~0u - 0,
+#define AST_NodeTypes_Declare(type, ...) type,
+    AST_NodeTypes(AST_NodeTypes_Declare)
 };
 
-inline
-AstHeader get_vardecl_header(bool constant, bool type, bool init)
+struct AstHeader
 {
-    if (init) {
-        if (type) {
-            return constant
-                ? AstHeader::VarDecl_TypeConstInit
-                : AstHeader::VarDecl_TypeMutableInit;
-        } else {
-            return constant
-                ? AstHeader::VarDecl_ConstInit
-                : AstHeader::VarDecl_MutableInit;
-        }
-    } else {
-        return type ? AstHeader::VarDecl_Type : AstHeader::VarDecl;
+    AstNodeType type;
+    u16 flags;
+};
+
+constexpr u16 Ast_Number_BaseMask = 0b11;
+constexpr u16 Ast_Number_Base2    =    0;
+constexpr u16 Ast_Number_Base8    =    1;
+constexpr u16 Ast_Number_Base10   =    2;
+constexpr u16 Ast_Number_Base16   =    3;
+
+inline
+u16 ast_get_number_base(AstHeader header)
+{
+    switch (header.flags & Ast_Number_BaseMask) {
+        case Ast_Number_Base2: return 2;
+        case Ast_Number_Base8: return 8;
+        case Ast_Number_Base10: return 10;
+        case Ast_Number_Base16: return 16;
     }
+    std::unreachable();
+}
+
+constexpr u16 Ast_Boolean_True = 1;
+
+constexpr u16 Ast_VarDecl_IsConstant = 1;
+constexpr u16 Ast_VarDecl_HasType    = 2;
+constexpr u16 Ast_VarDecl_HasInit    = 4;
+
+constexpr u16 Ast_Node_HasMainBlock                = 1;
+constexpr u16 Ast_Node_MainBlockHasTerminal        = 2;
+constexpr u16 Ast_Node_HasAlternativeBlock         = 4;
+constexpr u16 Ast_Node_AlternativeBlockHasTerminal = 8;
+
+constexpr u16 Ast_Operator_TypeMask  = 0xFF;
+constexpr u16 Ast_Operator_ArityMask = 0b11 << 8;
+constexpr u16 Ast_Operator_Arity0    =    0 << 8;
+constexpr u16 Ast_Operator_Arity1    =    1 << 8;
+constexpr u16 Ast_Operator_Arity2    =    2 << 8;
+
+inline Operator ast_get_op_type(AstHeader header)
+{
+    return Operator(header.flags & Ast_Operator_TypeMask);
 }
 
 inline
-bool ast_vardecl_header_is_constant(AstHeader header)
+u16 ast_get_op_arity(AstHeader header)
 {
-    return header == AstHeader::VarDecl_ConstInit
-        || header == AstHeader::VarDecl_TypeConstInit;
+    switch (header.flags & Ast_Operator_ArityMask) {
+        case Ast_Operator_Arity0: return 0;
+        case Ast_Operator_Arity1: return 1;
+        case Ast_Operator_Arity2: return 2;
+    }
+    std::unreachable();
 }
 
 inline
-bool ast_vardecl_header_has_type(AstHeader header)
+std::string_view get_ast_node_type_name(AstNodeType type)
 {
-    return header == AstHeader::VarDecl_Type
-        || header == AstHeader::VarDecl_TypeConstInit
-        || header == AstHeader::VarDecl_TypeMutableInit;
-}
-
-inline
-bool ast_vardecl_header_has_init(AstHeader header)
-{
-    return header == AstHeader::VarDecl_ConstInit
-        || header == AstHeader::VarDecl_MutableInit
-        || header == AstHeader::VarDecl_TypeConstInit
-        || header == AstHeader::VarDecl_TypeMutableInit;
-}
-
-inline
-std::string_view get_ast_header_name(AstHeader header)
-{
-    switch (header)
+    switch (type)
     {
-    #define AST_Headers_ToString(name, ...) case AstHeader::name : return #name;
-        AST_Headers(AST_Headers_ToString)
-    #define X(name, ...) case AstHeader::name: return #name;
-        OPS_Prefix
-        OPS_Postfix
-        OPS_Arithmetic
-        OPS_Bitwise
-        OPS_Logical
-        OPS_Comparison
-        OPS_Range
-        OPS_Assign
-    #undef X
-    #define X(name, ...) case AstHeader::name:         return #name; \
-                         case AstHeader::name##_Empty: return #name "_Empty";
-        OPS_ControlFlow
-    #undef X
-        case AstHeader::End: return "End";
-        default: raise_error("unknown header: {}", std::to_underlying(header));
+        #define AST_NodeType_ToString(type, ...) case AstNodeType::type: return #type;
+            AST_NodeTypes(AST_NodeType_ToString)
     }
 }
+
+// -----------------------------------------------------------------------------
 
 struct AstOffset
 {
@@ -775,26 +754,18 @@ struct Ast
 
     AstOffset write(AstHeader header) {
         auto _offset = offset();
-        code.emplace_back(std::to_underlying(header));
+        code.emplace_back(std::bit_cast<u32>(header));
         return _offset;
     }
 
-    template<typename T>
-    void write(T t)
+    void write(AstOffset t)
     {
-        code.emplace_back(std::bit_cast<u32>(t));
+        code.emplace_back(t.value);
     }
 
-    template<typename T>
-    void write_at(AstOffset offset, T t)
+    void write(u32 t)
     {
-        code[offset.value] = std::bit_cast<u32>(t);
-    }
-
-    template<typename T>
-    void insert_at(AstOffset offset, T t)
-    {
-        code.insert(code.begin() + offset.value, std::bit_cast<u32>(t));
+        code.emplace_back(t);
     }
 };
 struct AstListBuilder
@@ -807,10 +778,10 @@ struct AstListBuilder
 
     void add(AstOffset entry)
     {
-        if (last) ast->write_at(last, entry);
+        if (last) ast->code[last.value] = entry.value;
         else first = entry;
         last = entry;
-        ast->insert_at(last, AstOffset{});
+        ast->code.insert(ast->code.begin() + last.value, AstOffset::Invalid);
     }
 
     AstOffset to_list()
@@ -819,9 +790,10 @@ struct AstListBuilder
     }
 };
 
+// -----------------------------------------------------------------------------
+
 AstOffset parse(Ast& out, struct Scanner* scanner, Constants& constants);
 
-void ast_print_flat(Constants& constants, Ast& ast);
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);
 void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset);
 void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::string_view source);

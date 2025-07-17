@@ -8,8 +8,9 @@
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <cstring>
 
-#include <string.h>
+#include <mimalloc.h>
 
 #define NAMESPACE_BEGIN(name) namespace name {
 #define NAMESPACE_SWITCH(name) } namespace name {
@@ -323,6 +324,68 @@ std::string read_file(std::string_view path)
     });
     return message;
 }
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//     Allocation
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+template<typename T>
+T* byte_offset_pointer(auto* in, i64 byte_offset)
+{
+    return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(in) + byte_offset);
+}
+
+struct ArenaAllocator
+{
+    void* cleanup_head = nullptr;
+
+    struct Header
+    {
+        void* next;
+        void* prev;
+    };
+
+    template<typename T>
+    T* alloc(T&& source)
+    {
+        void* data = mi_malloc_aligned_at(sizeof(T), std::max(alignof(Header), alignof(T)), sizeof(Header));
+
+        if (cleanup_head) {
+            byte_offset_pointer<Header>(cleanup_head, 0)->prev = data;
+        }
+        *byte_offset_pointer<Header>(data, 0) = {.next = cleanup_head};
+        cleanup_head = data;
+
+        return byte_offset_pointer<T>(data, sizeof(Header));
+    }
+
+    void free(void* data)
+    {
+        auto header = byte_offset_pointer<Header>(data, -sizeof(Header));
+        auto prev_header = byte_offset_pointer<Header>(header->prev, 0);
+        prev_header->next = header->next;
+        mi_free(byte_offset_pointer<void>(data, -sizeof(Header)));
+    }
+
+    void clear()
+    {
+        void* head = cleanup_head;
+        while (head) {
+            log_trace("freeing allocation [{}]", head);
+            auto next = byte_offset_pointer<Header>(head, 0)->next;
+            mi_free(head);
+            head = next;
+        }
+    }
+};
 
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------

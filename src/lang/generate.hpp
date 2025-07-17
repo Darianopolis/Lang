@@ -79,39 +79,37 @@ struct CodeGenerator
     {
         auto[ip, header] = annotator.get_ip_header(offset);
 
-        switch (header) {
-            case AstHeader::Identifier:
+        switch (header.type) {
+            case AstNodeType::Identifier:
                 return true;
 
-            case AstHeader::Literal_Number:
+            case AstNodeType::Number:
                 return true;
 
-            case AstHeader::If:
+            case AstNodeType::If:
             {
-                requires_temporary.insert(offset.value);
-                can_fold(ip[1]);
-                can_fold_block(ip[2]);
-
-                return false;
-            }
-
-            case AstHeader::IfElse:
-            {
-                bool foldable = true;
-                foldable &= can_fold(ip[1]);
-                foldable &= can_fold_block(ip[2]);
-                foldable &= can_fold_block(ip[3]);
-
-                if (!foldable) {
+                if (!(header.flags & Ast_Node_HasAlternativeBlock)) {
                     requires_temporary.insert(offset.value);
+                    can_fold(ip[1]);
+                    can_fold_block(ip[2]);
+
+                    return false;
+                } else {
+                    bool foldable = true;
+                    foldable &= can_fold(ip[1]);
+                    foldable &= can_fold_block(ip[2]);
+                    foldable &= can_fold_block(ip[3]);
+
+                    if (!foldable) {
+                        requires_temporary.insert(offset.value);
+                    }
+                    return foldable;
                 }
-                return foldable;
             }
 
-            case AstHeader::Add:
-            case AstHeader::Subtract:
-            case AstHeader::Less:
+            case AstNodeType::Op:
             {
+                // TODO: Not all operators can fold
                 auto foldable = can_fold(ip[1]) && can_fold(ip[2]);
                 if (!foldable) {
                     requires_temporary.insert(offset.value);
@@ -119,7 +117,7 @@ struct CodeGenerator
                 return foldable;
             }
 
-            case AstHeader::Call:
+            case AstNodeType::Call:
             {
                 auto foldable = true;
                 for_each(ip[2], [&](AstOffset offset) {
@@ -132,7 +130,7 @@ struct CodeGenerator
             }
 
             default:
-                raise_error("unhandled AST node type: {}", get_ast_header_name(header));
+                raise_error("unhandled AST node type: {}", get_ast_node_type_name(header.type));
         }
     }
 
@@ -148,8 +146,8 @@ struct CodeGenerator
     {
         auto[ip, header] = annotator.get_ip_header(offset);
 
-        switch (header) {
-            case AstHeader::Identifier:
+        switch (header.type) {
+            case AstNodeType::Identifier:
             {
                 auto res = ans->get(offset).result;
 
@@ -164,7 +162,7 @@ struct CodeGenerator
                 }
             }
 
-            case AstHeader::Literal_Number:
+            case AstNodeType::Number:
             {
                 if (!requires_temporary.contains(offset.value)) {
                     std::print("{}", std::dynamic_pointer_cast<Integer32>(ans->get(offset).result.value)->value);
@@ -177,8 +175,7 @@ struct CodeGenerator
                 }
             }
 
-            case AstHeader::If:
-            case AstHeader::IfElse:
+            case AstNodeType::If:
             {
                 if (!requires_temporary.contains(offset.value)) {
                     std::print("(");
@@ -209,7 +206,7 @@ struct CodeGenerator
                         std::println(";");
                     }
 
-                    if (header == AstHeader::IfElse) {
+                    if (header.flags & Ast_Node_HasAlternativeBlock) {
                         std::println("}} else {{");
 
                         if (requires_temporary.contains(ip[2])) {
@@ -226,18 +223,16 @@ struct CodeGenerator
                 return;
             }
 
-            case AstHeader::Add:
-            case AstHeader::Subtract:
-            case AstHeader::Less:
+            case AstNodeType::Op:
             {
                 char op = {};
-                switch (header) {
-                    case AstHeader::Add:      op = '+'; break;
-                    case AstHeader::Subtract: op = '-'; break;
-                    case AstHeader::Less:     op = '<'; break;
+                switch (ast_get_op_type(header)) {
+                    case Operator::Add:      op = '+'; break;
+                    case Operator::Subtract: op = '-'; break;
+                    case Operator::Less:     op = '<'; break;
 
                     default:
-                        std::unreachable();
+                        raise_error("unsupported operator type for C code generation");
                 }
 
                 if (!requires_temporary.contains(offset.value)) {
@@ -260,7 +255,7 @@ struct CodeGenerator
                 return;
             }
 
-            case AstHeader::Call:
+            case AstNodeType::Call:
             {
                 if (!requires_temporary.contains(offset.value)) {
                     std::print("{}(", ans->get(offset).function->symbol);
@@ -293,7 +288,7 @@ struct CodeGenerator
             }
 
             default:
-                raise_error("generator :: unhandled AST node type: {}", get_ast_header_name(header));
+                raise_error("generator :: unhandled AST node type: {}", get_ast_node_type_name(header.type));
         }
     }
 
@@ -311,7 +306,6 @@ struct CodeGenerator
                 std::print("{} {}", type_to_ctype(annotator, annotation.result.type), local_str(annotation.result.local_index.value()));
             });
             std::println(") {{");
-            // std::println("return 0;\n}}");
 
             can_fold_block(ip[3]);
 
@@ -328,16 +322,13 @@ struct CodeGenerator
             }
 
             std::println("}}");
-            // ComptimeEvaluateResult res;
-            // annotator.for_each(ip[3], [&](AstOffset offset) {
-            //     auto[ip, header] = annotator.get_ip_header(offset);
-            // });
         } else {
             log_debug("no code to generate for non function");
         }
     }
 };
 
+#if 0
 inline
 void print_annotations(Compiler* compiler, AnnotatedFragment& annotated_fragment)
 {
@@ -375,34 +366,31 @@ void print_annotations(Compiler* compiler, AnnotatedFragment& annotated_fragment
                 print_node(next + 1, depth);
                 next = ast.at(next);
             }
-            // compacted.write(AstOffset{});
         };
 
-        auto header = AstHeader(*ip);
+        auto header = std::bit_cast<AstHeader>(*ip);
 
-        PRINT("{}: {}", get_ast_header_name(header), get_annotation_string(offset));
+        PRINT("{}: {}", get_ast_node_type_name(header.type), get_annotation_string(offset));
         if (annotated_fragment.annotations.get(offset).result.value) {
             return;
         }
 
-        // compacted.write(header);
-        switch (header) {
-            case AstHeader::File:
+        switch (header.type) {
+            case AstNodeType::File:
                 print_list(ip[1], depth);
                 break;
-            case AstHeader::Block:
+            case AstNodeType::Block:
                 print_list(ip[1], depth + 1);
                 break;
-            case AstHeader::Literal_Number:
+            case AstNodeType::Number:
                 PRINT("  {}", constants.numbers.from_id(ip[1]));
-                // compacted.write(ip[1]);
                 break;
-            case AstHeader::Literal_String:
+            case AstNodeType::String:
                 PRINT("  {}", constants.strings.from_id(ip[1]));
-                // compacted.write(ip[1]);
                 break;
-            case AstHeader::Literal_True:
-            case AstHeader::Literal_False:
+            case AstNodeType::Boolean:
+                PRINT("  {}", bool(header.flags & Ast_Boolean_True));
+                break;
             case AstHeader::Break_Empty:
             case AstHeader::Continue_Empty:
             case AstHeader::Return_Empty:
@@ -520,5 +508,6 @@ void print_annotations(Compiler* compiler, AnnotatedFragment& annotated_fragment
 
     print_node_root(annotated_fragment.fragment.offset, 0);
 }
+#endif
 
 NAMESPACE_END

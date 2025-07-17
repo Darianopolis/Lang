@@ -277,6 +277,8 @@ x :: 123;
         log_debug("parsed in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
     }
 
+    log_debug("Tree");
+    ast_print_tree(constants, ast, offset);
     ast_print_details(constants, ast, offset, message);
 #endif
 
