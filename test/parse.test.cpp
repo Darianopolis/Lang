@@ -4,9 +4,9 @@
 #include "lang/scan.hpp"
 #include "lang/strings.hpp"
 
-#include <random>
-
 #include <simdutf.h>
+
+#include <random>
 
 NAMESPACE_BEGIN()
 
@@ -34,7 +34,8 @@ TestResults test_scan_parse(Constants& constants, std::string_view input, std::s
             switch (token.type) {
                 case TokenTypes::Identifier: not_equal = token.identifier   != expected[i].identifier;   break;
                 case TokenTypes::String:     not_equal = token.string.value != expected[i].string.value; break;
-                case TokenTypes::Number:     not_equal = token.number       != expected[i].number;       break;
+                case TokenTypes::Integer:    not_equal = token.integer      != expected[i].integer;      break;
+                case TokenTypes::Real:       not_equal = token.real         != expected[i].real;         break;
             }
         }
         if (not_equal) {
@@ -96,36 +97,35 @@ TestResults test_positives()
 
     Constants constants;
 
-    auto sym = [&](std::string_view type) consteval -> Token { return {punc(type)};                                            };
-    auto kyw = [&](std::string_view type)           -> Token { return {keyword(type)};                                         };
-    auto num = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 10}}};     };
-    auto bin = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 2}}};      };
-    auto oct = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 8}}};      };
-    auto hex = [&](std::string_view value)          -> Token { return {TokenTypes::Number, 0, 0, {.number = {value, 16}}};     };
-    auto str = [&](std::string_view value)          -> Token { return {TokenTypes::String, 0, 0, {.string = {value}}};         };
-    auto id  = [&](std::string_view value)          -> Token { return {TokenTypes::Identifier, 0, 0, {.identifier = {value}}}; };
+    auto sym  = [&](std::string_view type) consteval -> Token { return {punc(type)};                                            };
+    auto kyw  = [&](std::string_view type)           -> Token { return {keyword(type)};                                         };
+    auto num  = [&](u128 value)                      -> Token { return {TokenTypes::Integer,    0, 0, {.integer    =  value }}; };
+    auto real = [&](f128 value)                      -> Token { return {TokenTypes::Real,       0, 0, {.real       =  value }}; };
+    auto str  = [&](std::string_view value)          -> Token { return {TokenTypes::String,     0, 0, {.string     = {value}}}; };
+    auto id   = [&](std::string_view value)          -> Token { return {TokenTypes::Identifier, 0, 0, {.identifier = {value}}}; };
 
-    auto _num = [&](std::string_view val)            { return constants.numbers.get_id(val);                };
-    auto _id  = [&](std::string_view val)            { return constants.identifiers.get_id(val);            };
-    auto ast  = [&](AstNodeType type, u16 flags = 0) { return std::bit_cast<u32>(AstHeader{ type, flags }); };
+    auto _num  = [&](u128 val)                        { return constants.integers.get_id(val);                };
+    auto _real = [&](f128 val)                        { return constants.reals.get_id(val);                   };
+    auto _id   = [&](std::string_view val)            { return constants.identifiers.get_id(val);             };
+    auto ast   = [&](AstNodeType type, u16 flags = 0) { return std::bit_cast<u32>(AstHeader{ type, flags });  };
 
     TestResults res;
 
     // operator precedence
-    res += test_scan_parse(constants, "1 + ++a^ * 3",
-        { num("1"), sym("+"), sym("++"), id("a"), sym("^"), sym("*"), num("3") },
+    res += test_scan_parse(constants, "1 + ++a^ * 3.0",
+        { num(1), sym("+"), sym("++"), id("a"), sym("^"), sym("*"), num(3) },
         { ast(File),
-            ast(Op, u16(Operator::Add) | Ast_Operator_Arity2),
-                ast(Number, Ast_Number_Base10), _num("1"),
-                ast(Op, u16(Operator::Multiply) | Ast_Operator_Arity2),
-                    ast(Op, u16(Operator::Dereference) | Ast_Operator_Arity1),
-                        ast(Op, u16(Operator::Preincrement) | Ast_Operator_Arity1),
+            ast(BinaryOp, u16(Operator::Add)),
+                ast(Number), _num(1),
+                ast(BinaryOp, u16(Operator::Multiply)),
+                    ast(UnaryOp, u16(Operator::Dereference)),
+                        ast(UnaryOp, u16(Operator::Preincrement)),
                             ast(Identifier), _id("a"),
-                    ast(Number, Ast_Number_Base10), _num("3") });
+                    ast(Number), _real(3.0) });
 
     // keywords
     res += test_scan_parse(constants, "for 0..12 -> (x) {}",
-        { kyw("for"), num("0"), sym(".."), num("12"), sym("->"), sym("("), id("x"), sym(")"), sym("{"), sym("}")});
+        { kyw("for"), num(0), sym(".."), num(12), sym("->"), sym("("), id("x"), sym(")"), sym("{"), sym("}")});
 
     // strings
     res += test_scan_parse(constants, R"( 'raw"'""'"raw' )",                 { str("'\"\"'")                            });
@@ -138,16 +138,16 @@ TestResults test_positives()
 #endif
 
     // numbers
-    res += test_scan_parse(constants, "0.1e+2",        { num("0.1e+2")        });
-    res += test_scan_parse(constants, "0x4f.f12p-4",   { hex("4f.f12p-4")     });
-    res += test_scan_parse(constants, "0o777#foo ba",  { oct("777")           });
-    res += test_scan_parse(constants, "0123",          { num("0123")          });
-    res += test_scan_parse(constants, "0b01101",       { bin("01101")         });
-    res += test_scan_parse(constants, "10_000_000.00", { num("10_000_000.00") });
+    res += test_scan_parse(constants, "0.1e+2",        { real(0.1e+2)        });
+    res += test_scan_parse(constants, "0x4f.f12p-4",   { real(0x4f.f12p-4)   });
+    res += test_scan_parse(constants, "0o777#foo ba",  { num(0777)           });
+    res += test_scan_parse(constants, "0123",          { num(123)            });
+    res += test_scan_parse(constants, "0b01101",       { num(0b01101)        });
+    res += test_scan_parse(constants, "10_000_000.00", { real(10'000'000.00) });
 
     // comments
     res += test_scan_parse(constants, "# 0123",             {            });
-    res += test_scan_parse(constants, "#[\n,#[[#[]]]pmqg79\n] 123", { num("123") });
+    res += test_scan_parse(constants, "#[\n,#[[#[]]]pmqg79\n] 123", { num(123) });
 
     // keywords
     {

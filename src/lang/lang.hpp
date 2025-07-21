@@ -8,7 +8,6 @@
 #include <variant>
 #include <algorithm>
 #include <cstring>
-#include <any>
 
 #include <ankerl/unordered_dense.h>
 
@@ -122,13 +121,15 @@ struct Constants
 {
     Dedup<std::string_view> identifiers;
     Dedup<std::string_view> strings;
-    Dedup<std::string_view> numbers;
+    Dedup<u128> integers;
+    Dedup<f128> reals;
 
     void clear()
     {
         identifiers.clear();
         strings.clear();
-        numbers.clear();
+        integers.clear();
+        reals.clear();
     }
 };
 
@@ -144,8 +145,7 @@ struct Constants
 // -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 
-constexpr std::array Keywords
-{
+constexpr std::array Keywords {
     "if", "else",
     "for", "while", "match",
     "break", "continue",
@@ -223,12 +223,13 @@ namespace TokenTypes {
     constexpr TokenType Eof          = TokenType(1);
     constexpr TokenType Identifier   = TokenType(2);
     constexpr TokenType String       = TokenType(3);
-    constexpr TokenType Number       = TokenType(4);
+    constexpr TokenType Integer      = TokenType(4);
+    constexpr TokenType Real         = TokenType(5);
 
-    constexpr TokenType Keyword_First = TokenType(5);
-    constexpr TokenType Keyword_Last  = TokenType(5 + Keywords.size() - 1);
-    constexpr TokenType Punc_First    = TokenType(5 + Keywords.size());
-    constexpr TokenType Punc_Last     = TokenType(5 + Keywords.size() + PunctuationSequences.size() - 1);
+    constexpr TokenType Keyword_First = TokenType(6);
+    constexpr TokenType Keyword_Last  = TokenType(6 + Keywords.size() - 1);
+    constexpr TokenType Punc_First    = TokenType(6 + Keywords.size());
+    constexpr TokenType Punc_Last     = TokenType(6 + Keywords.size() + PunctuationSequences.size() - 1);
 };
 
 inline
@@ -253,8 +254,10 @@ std::string_view get_token_type_name(TokenType type)
             return "Identifier";
         case TokenTypes::String:
             return "String";
-        case TokenTypes::Number:
-            return "Number";
+        case TokenTypes::Integer:
+            return "Integer";
+        case TokenTypes::Real:
+            return "Real";
         case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
             return get_keyword_str(type);
         case TokenTypes::Punc_First...TokenTypes::Punc_Last:
@@ -336,17 +339,11 @@ struct Token
         constexpr bool operator==(const String&) const noexcept = default;
     };
 
-    struct Number {
-        std::string_view value;
-        u8 base;
-
-        constexpr bool operator==(const Number&) const noexcept = default;
-    };
-
     union {
         Identifier identifier = {};
         String string;
-        Number number;
+        u128 integer;
+        f128 real;
     };
 
     operator bool() const noexcept
@@ -371,7 +368,8 @@ struct Token
 #define TOKEN_HasValueCases \
     case TokenTypes::Identifier: \
     case TokenTypes::String: \
-    case TokenTypes::Number
+    case TokenTypes::Integer: \
+    case TokenTypes::Real
 
 inline
 bool token_has_value(TokenType type)
@@ -398,8 +396,11 @@ std::string token_to_string(Token token)
             } else {
                 return std::format("String({})", token.string.value);
             }
-        case TokenTypes::Number:
-            return std::format("Number<{}>({})", token.number.base, token.number.value);
+        case TokenTypes::Integer:
+            return std::format("Integer({})", token.integer);
+        case TokenTypes::Real: {
+            return std::format("Real({})", token.real);
+        }
         case TokenTypes::Keyword_First...TokenTypes::Keyword_Last:
             return std::format("Keyword({})", get_keyword_str(token.type));
         case TokenTypes::Punc_First...TokenTypes::Punc_Last:
@@ -489,6 +490,10 @@ enum class Operator : u8
     OPS_All
 #undef X
 };
+
+#define X(i, ...) + 1
+constexpr auto Operator_Count = 1 OPS_All;
+#undef X
 
 constexpr
 std::string_view get_op_name(Operator op)
@@ -633,10 +638,14 @@ constexpr bool is_op_postfix(Operator op)
     DO(While) \
     DO(For) \
     DO(Function) \
-    DO(Op) \
+    DO(UnaryOp) \
+    DO(BinaryOp) \
     DO(FieldAccess) \
     DO(Call) \
     DO(Subscript) \
+    DO(Break) \
+    DO(Continue) \
+    DO(Return) \
 
 enum class AstNodeType : u16
 {
@@ -647,26 +656,11 @@ enum class AstNodeType : u16
 struct AstHeader
 {
     AstNodeType type;
-    u16 flags;
+    u16 flags : 15;
+    u16 _header_bit : 1 = 1;
 };
 
-constexpr u16 Ast_Number_BaseMask = 0b11;
-constexpr u16 Ast_Number_Base2    =    0;
-constexpr u16 Ast_Number_Base8    =    1;
-constexpr u16 Ast_Number_Base10   =    2;
-constexpr u16 Ast_Number_Base16   =    3;
-
-inline
-u16 ast_get_number_base(AstHeader header)
-{
-    switch (header.flags & Ast_Number_BaseMask) {
-        case Ast_Number_Base2: return 2;
-        case Ast_Number_Base8: return 8;
-        case Ast_Number_Base10: return 10;
-        case Ast_Number_Base16: return 16;
-    }
-    std::unreachable();
-}
+constexpr u16 Ast_Number_IsReal = 1;
 
 constexpr u16 Ast_Boolean_True = 1;
 
@@ -680,26 +674,14 @@ constexpr u16 Ast_Node_HasAlternativeBlock         = 4;
 constexpr u16 Ast_Node_AlternativeBlockHasTerminal = 8;
 
 constexpr u16 Ast_Operator_TypeMask  = 0xFF;
-constexpr u16 Ast_Operator_ArityMask = 0b11 << 8;
-constexpr u16 Ast_Operator_Arity0    =    0 << 8;
-constexpr u16 Ast_Operator_Arity1    =    1 << 8;
-constexpr u16 Ast_Operator_Arity2    =    2 << 8;
 
 inline Operator ast_get_op_type(AstHeader header)
 {
     return Operator(header.flags & Ast_Operator_TypeMask);
 }
 
-inline
-u16 ast_get_op_arity(AstHeader header)
-{
-    switch (header.flags & Ast_Operator_ArityMask) {
-        case Ast_Operator_Arity0: return 0;
-        case Ast_Operator_Arity1: return 1;
-        case Ast_Operator_Arity2: return 2;
-    }
-    std::unreachable();
-}
+constexpr u16 Ast_ControlFlow_HasLabel = 1;
+constexpr u16 Ast_ControlFlow_HasValue = 2;
 
 inline
 std::string_view get_ast_node_type_name(AstNodeType type)
@@ -709,6 +691,7 @@ std::string_view get_ast_node_type_name(AstNodeType type)
         #define AST_NodeType_ToString(type, ...) case AstNodeType::type: return #type;
             AST_NodeTypes(AST_NodeType_ToString)
     }
+    std::unreachable();
 }
 
 // -----------------------------------------------------------------------------
@@ -752,6 +735,8 @@ struct Ast
         return code.data() + offset.value;
     }
 
+    // Writing
+
     AstOffset write(AstHeader header) {
         auto _offset = offset();
         code.emplace_back(std::bit_cast<u32>(header));
@@ -766,6 +751,13 @@ struct Ast
     void write(u32 t)
     {
         code.emplace_back(t);
+    }
+
+    // Reading
+
+    AstHeader read_header(AstOffset offset)
+    {
+        return std::bit_cast<AstHeader>(at(offset));
     }
 };
 struct AstListBuilder
@@ -794,6 +786,7 @@ struct AstListBuilder
 
 AstOffset parse(Ast& out, struct Scanner* scanner, Constants& constants);
 
+void ast_print_flat(Ast& ast);
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted);
 void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset);
 void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::string_view source);

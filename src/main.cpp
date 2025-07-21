@@ -29,6 +29,14 @@ void samples()
 
 #if 1
     std::string_view message = R"(
+
+if a {
+} else {
+    continue;
+}
+
+#[[[
+
 x := 1;
 while x < 10 {
     x += 1;
@@ -57,6 +65,8 @@ foo :: @as(u8, 1234);
 bar :: @typeOf(foo);
 alpha: u32 = undefined;
 if beta != null and x {}
+
+]]]
 )";
 #endif
 
@@ -276,6 +286,9 @@ x :: 123;
         auto seconds = std::chrono::duration_cast<std::chrono::duration<f64>>(end - start).count();
         log_debug("parsed in {} ({}/s)", duration_to_string(end - start), byte_size_to_string(message.size() / seconds));
     }
+
+    log_debug("Flat");
+    ast_print_flat(ast);
 
     log_debug("Tree");
     ast_print_tree(constants, ast, offset);

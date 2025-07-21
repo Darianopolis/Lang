@@ -4,7 +4,7 @@ CompileFlags:
     CompilationDatabase: .build
 
 Diagnostics:
-    Suppress: unused-includes
+    Suppress: [unused-includes, builtin_definition]
 
 InlayHints:
     Enabled: No

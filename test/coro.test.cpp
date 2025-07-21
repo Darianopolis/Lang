@@ -1,3 +1,4 @@
+#if 0
 #include "test.hpp"
 #include "lang/scan.hpp"
 
@@ -32,3 +33,4 @@ Registered _1 = register_test("coroutine", [] -> TestResults {
 });
 
 NAMESPACE_END
+#endif

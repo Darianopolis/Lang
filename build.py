@@ -7,6 +7,9 @@ from pathlib import Path
 import subprocess
 import json
 import glob
+import asyncio
+import logging
+import multiprocessing
 
 # -----------------------------------------------------------------------------
 
@@ -51,6 +54,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-U", "--update", action="store_true", help="Update")
 parser.add_argument("-V", "--verbose", action="store_true", help="Verbose")
 parser.add_argument("-M", "--mode", default="RelWithDebInfo", help="Set build mode")
+parser.add_argument("-j", "--threads", type = int, help="Set number of threads")
 args = parser.parse_args()
 
 # ------------------------------------------------------------------------------
@@ -135,6 +139,8 @@ compiler_warning_flags = [
     "-Wno-c99-designator",
     "-Wno-gnu-case-range",
 
+    "-Wno-ignored-attributes", # gcc complains about `unsigned __int128` being used in a template parameter
+
     "-Wimplicit-fallthrough",
 ]
 
@@ -151,6 +157,8 @@ build_mode_flags = {
 # simd_flags = [ "-mavx512f", "-mavx512vl", "-mavx512bw" ]
 simd_flags = [ "-mavx2" ]
 
+build_single_threaded = False
+
 build_mode = args.mode
 if not build_mode in build_mode_flags:
     panic(f"Unrecognised build mode: {build_mode}")
@@ -164,7 +172,6 @@ def define(v):
 def source_no_glob(file):
     global sources
     external = Path(file).is_relative_to(Path(vendor_folder))
-    # log_debug(f"Sourcing [{file}], external = {external}")
     sources += [(file, external)]
 
 def source(path):
@@ -194,14 +201,16 @@ def path_link(link):
     global path_links
     path_links += [link]
 
-def build():
+async def build():
     global links
 
-    compile_procs = []
-    compiler = "clang++"
-    # compiler = "g++"
+    # compiler = "clang++"
+    compiler = "g++"
 
     compiler_path = shutil.which("ccache")
+    # compiler_path = shutil.which("g++")
+
+    compile_json_commands = []
 
     compile_commands = []
 
@@ -235,42 +244,80 @@ def build():
         for d in defines:
             command += [f"-D{d}"]
 
-        compile_commands += [{
+        compile_json_commands += [{
             "directory": os.getcwd(),
             "command": ' '.join(command),
             "file": f"{os.getcwd()}/{s}",
             "output": f"{os.getcwd()}/{output}"
         }]
 
-        p = subprocess.Popen(args = command, executable = compiler_path, cwd = os.getcwd(), stdout = subprocess.PIPE, stderr = subprocess.PIPE)
-        compile_procs += [(command, p)]
+        compile_commands += [command]
 
     with open(f"{build_root}/compile_commands.json", "w") as out:
-        json.dump(compile_commands, out, indent = 2)
+        json.dump(compile_json_commands, out, indent = 2)
 
-    any_failed = False
+    max_parallel = args.threads or multiprocessing.cpu_count()
+    log_debug(f"Compiling with {max_parallel} threads")
+    semaphore = asyncio.Semaphore(max_parallel)
+    stop_event = asyncio.Event()
+    running_tasks = []
+    class CompileCounter:
+        def __init__(self):
+            self.counter = 0
+            self.lock = asyncio.Lock()
+        async def increment(self):
+            async with self.lock:
+                self.counter += 1
+                return self.counter
 
-    log_info_progress(f"Compiling [0/{len(compile_procs)}]")
-    compiles_finished = 0
+    compiles_finished = CompileCounter()
 
-    for command, p in compile_procs:
-        code = p.wait()
-        if code != 0:
-            any_failed = True
-            log_info_progress_end()
-            log_error(f"compile command failed with code {code}")
-            log_error(f"  args: {command}")
-            _, err = p.communicate()
-            print(err.decode('utf-8'))
+    async def compile_worker(cmd):
+        async with semaphore:
+            try:
+                if stop_event.is_set():
+                    return None
+                proc = await asyncio.create_subprocess_exec(
+                    compiler_path,
+                    *cmd,
+                    stdout = asyncio.subprocess.PIPE,
+                    stderr = asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                code = proc.returncode
+                if code != 0:
+                    stop_event.set()
+                    log_info_progress_end()
+                    log_error(f"Compile command failed with code {code}")
+                    log_error(f"  Args: {command}")
+                    print(stderr.decode('utf-8'))
+                else:
+                    if not stop_event.is_set():
+                        count = await compiles_finished.increment()
+                        log_info_progress(f"Compiling [{count}/{len(compile_commands)}]")
+            except:
+                stop_event.set()
+                log_info_progress_end()
+                log_error(f"Compile command failed with exception")
+                log_error(f"  Args: {command}")
+                logging.exception('')
 
-        compiles_finished = compiles_finished + 1
-        log_info_progress(f"Compiling [{compiles_finished}/{len(compile_procs)}]")
+    log_info_progress(f"Compiling [0/{len(compile_commands)}]")
+    for cmd in compile_commands:
+        if stop_event.is_set():
+            break
+        task = asyncio.create_task(compile_worker(cmd))
+        running_tasks.append(task)
 
-    log_info_progress_end()
+    await asyncio.gather(*running_tasks, return_exceptions = True)
 
-    if any_failed:
+    if stop_event.is_set():
         log_error("Aborting link due to failed compilation")
         return
+    else:
+        log_info_progress_end()
+
+    # link
 
     link_command  = [compiler, "-fuse-ld=lld"]
     if args.verbose:
@@ -298,8 +345,8 @@ def build():
     code = p.wait()
     if code != 0:
         log_info_progress_end()
-        log_error(f"link command failed with code {code}")
-        log_error(f"  args: {link_command}")
+        log_error(f"Link command failed with code {code}")
+        log_error(f"  Args: {link_command}")
         _, err = p.communicate()
         print(err.decode('utf-8'))
     else:
@@ -339,6 +386,9 @@ boost_projects = [
     ("assert", []),
     ("config", []),
     ("predef", []),
+
+    # ("multiprecision", []),
+    # ("math", []),
 ]
 for (proj, proj_sources) in boost_projects:
     proj_dir = git_source(f"boost_{proj}", f"https://github.com/boostorg/{proj}", "develop")
@@ -391,6 +441,33 @@ source(f"{backward_dir}/backward.cpp")
 
 # -----------------------------------------------------------------------------
 
+# libfmt_dir = git_source("libfmt", "https://github.com/fmtlib/fmt.git", "master")
+# source(f"{libfmt_dir}/src/*.cc")
+# include(f"{libfmt_dir}/include")
+
+# -----------------------------------------------------------------------------
+
+# path_link("quadmath")
+
+# def find_gcc_include():
+
+#     gcc_path = shutil.which("gcc")
+#     p = subprocess.Popen(args = ["gcc", "-print-file-name=include"], executable = gcc_path, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+#     code = p.wait()
+#     if code != 0:
+#         panic("failed to query gcc include dir")
+
+#     info, _ = p.communicate()
+
+#     str = info.decode('utf-8').strip()
+#     log_info(f"found gcc include path: [{str}]")
+
+#     return str
+
+# include(find_gcc_include())
+
+# -----------------------------------------------------------------------------
+
 source("src/**/*.cpp")
 include("src")
 
@@ -399,4 +476,4 @@ include("test")
 
 # -----------------------------------------------------------------------------
 
-build()
+asyncio.run(build())

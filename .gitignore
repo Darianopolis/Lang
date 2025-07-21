@@ -2,6 +2,7 @@
 build/
 .cache/
 .vscode/
+.unstaging/
 
 test/resources/
 

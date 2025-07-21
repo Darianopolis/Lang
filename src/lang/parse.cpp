@@ -764,16 +764,19 @@ struct Parser
                 advance();
                 raise_error("TODO");
                 // return finish_match();
-            case TokenTypes::Number: {
+            case TokenTypes::Integer: {
                 advance();
                 AstHeader header{AstNodeType::Number};
-                if      (next.number.base == 2)  header.flags |= Ast_Number_Base2;
-                else if (next.number.base == 8)  header.flags |= Ast_Number_Base8;
-                else if (next.number.base == 10) header.flags |= Ast_Number_Base10;
-                else if (next.number.base == 16) header.flags |= Ast_Number_Base16;
-                else raise_error("invalid base: {}", next.number.base);
                 auto offset = ast.write(header);
-                ast.write(constants->numbers.get_id(next.number.value));
+                ast.write(constants->integers.get_id(next.integer));
+                return offset;
+            }
+            case TokenTypes::Real: {
+                advance();
+                AstHeader header{AstNodeType::Number};
+                header.flags |= Ast_Number_IsReal;
+                auto offset = ast.write(header);
+                ast.write(constants->reals.get_id(next.real));
                 return offset;
             }
             case TokenTypes::String: {
@@ -857,10 +860,10 @@ struct Parser
             #define X(name, ...) \
                 case Operator::name: { \
                     if (is_end_of_expression_token(peek())) { \
-                        lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity0 | std::to_underlying(Operator::name))}); \
+                        lhs = ast.write({AstNodeType::name, 0}); \
                     } else { \
                         auto rhs = expression(op, mode); \
-                        lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
+                        lhs = ast.write({AstNodeType::name, u16(Ast_ControlFlow_HasValue)}); \
                         ast.write(rhs); \
                     } \
                     break; \
@@ -871,7 +874,7 @@ struct Parser
             #define X(name, ...) \
                 case Operator::name: { \
                     auto rhs = expression(op, mode); \
-                    lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
+                    lhs = ast.write({AstNodeType::UnaryOp, u16(std::to_underlying(Operator::name))}); \
                     ast.write(rhs); \
                     break; \
                 }
@@ -944,7 +947,7 @@ struct Parser
                     }
                 #define X(name, ...) case Operator::name: \
                     { \
-                        auto new_lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity1 | std::to_underlying(Operator::name))}); \
+                        auto new_lhs = ast.write({AstNodeType::UnaryOp, u16(std::to_underlying(Operator::name))}); \
                         ast.write(lhs); \
                         lhs = new_lhs; \
                         break; \
@@ -961,7 +964,7 @@ struct Parser
                 switch (op) {
                 #define X(name, ...) \
                     case Operator::name: { \
-                        auto new_lhs = ast.write({AstNodeType::Op, u16(Ast_Operator_Arity2 | std::to_underlying(Operator::name))}); \
+                        auto new_lhs = ast.write({AstNodeType::BinaryOp, u16(std::to_underlying(Operator::name))}); \
                         ast.write(lhs); \
                         ast.write(rhs); \
                         lhs = new_lhs; \

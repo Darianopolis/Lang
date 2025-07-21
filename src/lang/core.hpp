@@ -10,6 +10,10 @@
 #include <filesystem>
 #include <cstring>
 
+#include <fmt/format.h>
+
+// #include <quadmath.h>
+#include <ankerl/unordered_dense.h>
 #include <mimalloc.h>
 
 #define NAMESPACE_BEGIN(name) namespace name {
@@ -23,11 +27,13 @@ NAMESPACE_BEGIN(lang)
 
 using namespace std::literals;
 
+using u128 = __u128;
 using u64 = uint64_t;
 using u32 = uint32_t;
 using u16 = uint16_t;
 using u8 = uint8_t;
 
+using i128 = __int128;
 using i64 = int64_t;
 using i32 = int32_t;
 using i16 = int16_t;
@@ -42,6 +48,22 @@ using byte = std::byte;
 
 using f32 = float;
 using f64 = double;
+using f128 = __float128;
+
+inline
+f128 str_to_f128(const char* begin, char** end)
+{
+    return strtof128(begin, end);
+    // return strtoflt128(begin, end);
+}
+
+// inline
+// std::string to_string(f128 v)
+// {
+//     char buf[64] = {};
+//     auto len = quadmath_snprintf(buf, sizeof(buf), "%Qg", v);
+//     return std::string(buf, len);
+// }
 
 // -----------------------------------------------------------------------------
 
@@ -356,7 +378,7 @@ T* byte_offset_pointer(auto* in, i64 byte_offset)
 // -----------------------------------------------------------------------------
 
 inline
-std::string ascii_debug_string(char c)
+std::string ascii_debug_string(u8 c)
 {
     switch (c) {
         case '\n': return "\\n";
@@ -365,7 +387,7 @@ std::string ascii_debug_string(char c)
         case '\a': return "\\a";
         case '\b': return "\\b";
         case ' ': return "' '";
-        case ' ' + 1 ... 127: return std::string{ c };
+        case ' ' + 1 ... 127: return std::string{ char(c) };
         case 128:             return "DEL";
         default: return std::format("{{{}}}", int(c));
     }
@@ -466,3 +488,67 @@ std::string byte_size_to_string(u64 bytes)
 }
 
 NAMESPACE_END
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//     Hashes
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+template<>
+struct std::hash<lang::i128>
+{
+    lang::usz operator()(const lang::i128& s) const noexcept
+    {
+        return ankerl::unordered_dense::detail::wyhash::hash(&s, sizeof(s));
+    }
+};
+
+template<>
+struct std::hash<lang::u128>
+{
+    lang::usz operator()(const lang::u128& s) const noexcept
+    {
+        return ankerl::unordered_dense::detail::wyhash::hash(&s, sizeof(s));
+    }
+};
+
+template<>
+struct std::hash<lang::f128>
+{
+    lang::usz operator()(const lang::f128& s) const noexcept
+    {
+        return ankerl::unordered_dense::detail::wyhash::hash(&s, sizeof(s));
+    }
+};
+
+template<>
+struct std::formatter<lang::f128, char>
+{
+    template<typename ParseContext>
+    constexpr ParseContext::iterator parse(ParseContext& ctx)
+    {
+        auto it = ctx.begin();
+        if (it != ctx.end()) return it;
+        if (*it != '}') {
+            throw std::format_error("No format args supported for f128 currently");
+        }
+        return it;
+    }
+
+    template<typename FmtContext>
+    FmtContext::iterator format(lang::f128 v, FmtContext& ctx) const
+    {
+        char buf[64] = {};
+        // auto len = quadmath_snprintf(buf, sizeof(buf), "%Qg", v);
+        auto len = snprintf(buf, sizeof(buf), "%Qg", v);
+        std::copy_n(buf, len, ctx.out());
+        return ctx.out() + len;
+    }
+};

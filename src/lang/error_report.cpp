@@ -25,7 +25,7 @@ void restore_input_mode(const termios* original_termios)
     tcsetattr(STDIN_FILENO, TCSANOW, original_termios);
 }
 
-std::pair<int, int> get_cursor_position()
+std::pair<u32, u32> get_cursor_position()
 {
     std::cout << std::flush;
 
@@ -44,7 +44,7 @@ std::pair<int, int> get_cursor_position()
         }
     }
 
-    int row, col;
+    u32 row, col;
     if (sscanf(response.c_str(), "\033[%d;%dR", &row, &col) == 2) {
         return {row, col};
     } else {

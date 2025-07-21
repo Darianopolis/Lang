@@ -328,11 +328,13 @@ struct Scanner
 
 // -----------------------------------------------------------------------------
 
+    std::string num_parse_temp;
+
     LANG_forceinline
     bool match_binary_digit()
     {
         if (peek() == '0' || peek() == '1') {
-            position++;
+            num_parse_temp += advance();
             return true;
         }
         return false;
@@ -349,7 +351,7 @@ struct Scanner
                 }
                 return true;
             case '0' ... '1':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -361,7 +363,7 @@ struct Scanner
     {
         switch (peek()) {
             case '0' ... '7':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -379,7 +381,7 @@ struct Scanner
                 }
                 return true;
             case '0' ... '7':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -391,7 +393,7 @@ struct Scanner
     {
         switch (peek()) {
             case '0' ... '9':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -409,10 +411,21 @@ struct Scanner
                 }
                 return true;
             case '0' ... '9':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
+        }
+    }
+
+    u8 get_hexadecimal_digit_value(u8 digit)
+    {
+        switch (peek()) {
+            case '0' ... '9': return digit - '0';
+            case 'a' ... 'f': return 10 + digit - 'a';
+            case 'A' ... 'F': return 10 + digit - 'A';
+            default:
+                std::unreachable();
         }
     }
 
@@ -423,7 +436,7 @@ struct Scanner
             case '0' ... '9':
             case 'a' ... 'f':
             case 'A' ... 'F':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -443,7 +456,7 @@ struct Scanner
             case '0' ... '9':
             case 'a' ... 'f':
             case 'A' ... 'F':
-                position++;
+                num_parse_temp += advance();
                 return true;
             default:
                 return false;
@@ -451,7 +464,7 @@ struct Scanner
     }
 
     LANG_forceinline
-    void end_number(u8  base)
+    void end_number(u8 base)
     {
         switch (peek()) {
             case 'a' ... 'z':
@@ -469,30 +482,42 @@ struct Scanner
                 }
 
         }
-        token.number = {
-            .value = sub(token.file_offset, position - token.file_offset),
-            .base = base,
-        };
+        // token.number = {
+        //     .value = sub(token.file_offset, position - token.file_offset),
+        //     .base = base,
+        // };
         // log_debug("ending number, start = {}, end = {}, value = '{}'", token.file_offset, position, token.number.value);
     }
 
     void finish_binary()
     {
         token.file_offset = position;
-        if (!match_octal_digit()) {
+        if (!match_binary_digit()) {
             report_error(position, position - 2, "expected digit after binary literal introducer");
         }
         while (match_binary_digit_continuation());
+
+        token.integer = 0;
+        for (char c : num_parse_temp) {
+            token.integer = (token.integer << 1) | (c - '0');
+        }
+
         end_number(2);
     }
 
     void finish_octal()
     {
         token.file_offset = position;
-        if (!match_octal_digit()) {
+        if (char c = peek(); !match_octal_digit()) {
             report_error(position, position - 2, "expected digit after octal literal introducer");
         }
         while (match_octal_digit_continuation());
+
+        token.integer = 0;
+        for (char c : num_parse_temp) {
+            token.integer = (token.integer << 1) | (c - '0');
+        }
+
         end_number(8);
     }
 
@@ -504,53 +529,101 @@ struct Scanner
         }
         while (match_hexadecimal_digit_continuation());
         auto pos = position;
+        bool has_decimal_part = false;
         if (match('.')) {
             if (peek() == '.') {
                 position = pos;
             } else {
+                num_parse_temp += '.';
+                has_decimal_part = true;
                 if (!match_hexadecimal_digit()) {
                     report_error(position, token.file_offset, "expected digit to begin fractional part");
                 }
                 while (match_hexadecimal_digit_continuation());
                 if (match("p")) {
-                    match('+') || match('-');
+                    num_parse_temp += 'p';
+                    if      (match('+')) num_parse_temp += '+';
+                    else if (match('-')) num_parse_temp += '-';
                     while (match_decimal_digit_continuation());
                 }
             }
         } else {
             position = pos;
         }
+
+        if (has_decimal_part) {
+            token.type = TokenTypes::Real;
+            char* end;
+            token.real = str_to_f128(num_parse_temp.c_str(), &end);
+            if (end != num_parse_temp.c_str() + num_parse_temp.size()) {
+                report_error(token.file_offset - 2, position, "failed to parsed hexadecimal float [{}]", num_parse_temp);
+            }
+        } else {
+            token.integer = 0;
+            for (char c : num_parse_temp) {
+                token.integer = (token.integer << 4) | get_hexadecimal_digit_value(c);
+            }
+        }
+
         end_number(16);
+    }
+
+    void parse_decimal()
+    {
+        token.integer = 0;
+        for (char c : num_parse_temp) {
+            token.integer = (token.integer * 10) | (c - '0');
+        }
     }
 
     LANG_forceinline
     void finish_decimal_fraction()
     {
+        bool has_decimal_part = false;
         auto prev = position - 1;
         if (peek() == '.') {
             position = prev;
         } else {
+            has_decimal_part = true;
+            num_parse_temp += '.';
             if (!match_decimal_digit()) {
                     report_error(position, token.file_offset, "expected digit to begin fractional part");
             }
             while (match_decimal_digit_continuation());
             if (match("e")) {
-                match('+') || match('-');
+                num_parse_temp += 'e';
+                if      (match('+')) num_parse_temp += '+';
+                else if (match('-')) num_parse_temp += '-';
                 match_decimal_digit();
                 while (match_decimal_digit_continuation());
             }
         }
+
+        if (has_decimal_part) {
+            token.type = TokenTypes::Real;
+            char *end;
+            token.real = str_to_f128(num_parse_temp.c_str(), &end);
+            if (end != num_parse_temp.c_str() + num_parse_temp.size()) {
+                report_error(token.file_offset, position, "failed to parse decimal float [{}]", num_parse_temp);
+            }
+        } else {
+            parse_decimal();
+        }
+
         end_number(10);
     }
 
     LANG_forceinline
     void finish_decimal(char first)
     {
-        token.number.base = 10;
+        num_parse_temp.clear();
+        num_parse_temp += first;
+        token.type = TokenTypes::Integer;
         while (match_decimal_digit_continuation());
         if (match(".")) {
             finish_decimal_fraction();
         } else {
+            parse_decimal();
             end_number(10);
         }
     }
@@ -558,6 +631,8 @@ struct Scanner
     LANG_forceinline
     void finish_zero_prefixed_number()
     {
+        num_parse_temp.clear();
+        token.type = TokenTypes::Integer;
         switch (auto c = advance()) {
             case 'b': finish_binary(); break;
             case 'o': finish_octal(); break;
@@ -610,10 +685,10 @@ struct Scanner
 
                 case '0':
                     finish_zero_prefixed_number();
-                    return make_token(TokenTypes::Number);
+                    return token;
                 case '1' ... '9':
                     finish_decimal(c);
-                    return make_token(TokenTypes::Number);
+                    return token;
 
                 case '^': return make_token(punc("^"));
                 case '(': return make_token(punc("("));

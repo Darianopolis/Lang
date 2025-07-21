@@ -1,8 +1,24 @@
 #include "lang.hpp"
 
-// #include <zstd.h>
+#include <ranges>
 
 NAMESPACE_BEGIN(lang)
+
+void ast_print_flat(Ast& ast)
+{
+    for (auto[i, v] : ast.code | std::views::enumerate)
+    {
+        std::print("{:5} | ", i);
+        if (v == AstOffset::Invalid) {
+            std::println("End");
+        } else if (v & 0x8000'0000) {
+            auto header = std::bit_cast<AstHeader>(v);
+            std::println("{}({:#x})", get_ast_node_type_name(header.type), u16(header.flags));
+        } else {
+            std::println("{}", v);
+        }
+    }
+}
 
 void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacted)
 {
@@ -34,9 +50,12 @@ void ast_compact(Constants& constants, Ast& ast, AstOffset offset, Ast& compacte
                 compacted.write(ip[1]);
                 compact_node(ip[2]);
                 break;
-            case AstNodeType::Op:
-                if (ast_get_op_arity(header) >= 1) compact_node(ip[1]);
-                if (ast_get_op_arity(header) == 2) compact_node(ip[2]);
+            case AstNodeType::UnaryOp:
+                compact_node(ip[1]);
+                break;
+            case AstNodeType::BinaryOp:
+                compact_node(ip[1]);
+                compact_node(ip[2]);
                 break;
             case AstNodeType::VarDecl:
                 compact_node(ip[1]);
@@ -111,7 +130,12 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
                 print_list(ip[1], depth + 1);
                 break;
             case AstNodeType::Number:
-                PRINT("Number<{}>({})", ast_get_number_base(header), constants.numbers.from_id(ip[1]));
+                if (header.flags & Ast_Number_IsReal) {
+                    PRINT("Real({})", constants.reals.from_id(ip[1]));
+                } else {
+                    PRINT("Integer({})", constants.integers.from_id(ip[1]));
+                }
+
                 break;
             case AstNodeType::String:
                 PRINT("String({})", constants.strings.from_id(ip[1]));
@@ -126,11 +150,25 @@ void ast_print_tree(Constants& constants, Ast& ast, AstOffset offset)
             case AstNodeType::Identifier:
                 PRINT("Identifier({})", constants.identifiers.from_id(ip[1]));
                 break;
-            case AstNodeType::Op:
-                PRINT("Op<{}>({})", ast_get_op_arity(header), get_op_name(ast_get_op_type(header)));
+            case AstNodeType::Break:
+            case AstNodeType::Continue:
+            case AstNodeType::Return:
+                PRINT("{}", get_ast_node_type_name(header.type));
+                if (header.flags & Ast_ControlFlow_HasValue) {
+                    print_node(ip[1], depth + 1);
+                }
+                break;
+            case AstNodeType::UnaryOp:
+                PRINT("{}", get_op_name(ast_get_op_type(header)));
+                print_node(ip[1], depth + 1);
+                break;
+            case AstNodeType::BinaryOp:
+                PRINT("{}", get_op_name(ast_get_op_type(header)));
+                print_node(ip[1], depth + 1);
+                print_node(ip[2], depth + 1);
                 break;
             case AstNodeType::VarDecl:
-                PRINT("Decl<{}>", (header.flags & Ast_VarDecl_IsConstant) ? "Const" : "Var");
+                PRINT("{}", (header.flags & Ast_VarDecl_IsConstant) ? "Const" : "Var");
                 print_node(ip[1], depth + 1);
                 ip += 2;
                 if (header.flags & Ast_VarDecl_HasType) {
@@ -214,7 +252,8 @@ void ast_print_details(Constants& constants, Ast& ast, AstOffset offset, std::st
 
     log_debug("unique identifiers = {} / {} ({:.2f}x)", constants.identifiers.unique_count(), constants.identifiers.total_lookups, f64(constants.identifiers.total_lookups) / constants.identifiers.unique_count());
     log_debug("unique strings     = {} / {} ({:.2f}x)", constants.strings.unique_count(), constants.strings.total_lookups, f64(constants.strings.total_lookups) / constants.strings.unique_count());
-    log_debug("unique numbers     = {} / {} ({:.2f}x)", constants.numbers.unique_count(), constants.numbers.total_lookups, f64(constants.numbers.total_lookups) / constants.numbers.unique_count());
+    log_debug("unique integers    = {} / {} ({:.2f}x)", constants.integers.unique_count(), constants.integers.total_lookups, f64(constants.integers.total_lookups) / constants.integers.unique_count());
+    log_debug("unique reals       = {} / {} ({:.2f}x)", constants.reals.unique_count(), constants.reals.total_lookups, f64(constants.reals.total_lookups) / constants.reals.unique_count());
 
     log_debug("   source = {}", byte_size_to_string(source.size()));
     auto comparison_size = source.size();
